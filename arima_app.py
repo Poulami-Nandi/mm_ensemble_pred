@@ -73,19 +73,32 @@ if ohlcv_file and gt_file and selected_features:
             st.warning(f"Model failed on {test_date.date()}: {e}")
             continue
 
-    # Plotting
+    # Plot
     if predictions:
-        result_df = pd.DataFrame({'Date': dates, 'Actual': actuals, 'Predicted': predictions}).set_index('Date')
+        result_df = pd.DataFrame({
+            'Date': dates,
+            'Actual': actuals,
+            'Predicted': predictions
+        }).set_index('Date')
+
+        # Convert to float to avoid format error in annotation
+        result_df['Actual'] = pd.to_numeric(result_df['Actual'], errors='coerce')
+        result_df['Predicted'] = pd.to_numeric(result_df['Predicted'], errors='coerce')
+
         fig, ax = plt.subplots()
         result_df.plot(marker='o', ax=ax)
+
         for i, row in result_df.iterrows():
-            ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, color='green')
-            ax.annotate(f"{row['Predicted']:.2f}", (i, row['Predicted']), textcoords="offset points", xytext=(0,-15), ha='center', fontsize=8, color='blue')
+            if not pd.isna(row['Actual']):
+                ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']),
+                            textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
+            if not pd.isna(row['Predicted']):
+                ax.annotate(f"{row['Predicted']:.2f}", (i, row['Predicted']),
+                            textcoords="offset points", xytext=(0, -15), ha='center', fontsize=8)
+
         plt.title("Actual vs Predicted 'Open' Prices (Last 5 Trading Days)")
         plt.ylabel("Stock Price")
         plt.grid(True)
         st.pyplot(fig)
     else:
-        st.warning("Model could not generate any predictions. Check your data format or try different features.")
-else:
-    st.info("Please upload both datasets and select at least one feature.")
+        st.warning("Prediction failed for some days due to missing values or model issues.")
