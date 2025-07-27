@@ -29,6 +29,9 @@ if ohlcv_file and gt_file and selected_features:
     df = pd.merge(ohlcv_df, gt_df, left_index=True, right_index=True, how='inner')
     df = df[[*ohlcv_df.columns, gt_col_name]].dropna()
 
+    # Remove 'open' from exogenous features if accidentally selected
+    exog_features = [f for f in selected_features if f != 'open']
+
     predictions, actuals, dates = [], [], []
 
     for i in range(5, 0, -1):
@@ -36,11 +39,11 @@ if ohlcv_file and gt_file and selected_features:
         test_date = df.iloc[-i:].index[0]
 
         y_train = pd.to_numeric(train['open'], errors='coerce')
-        X_train = train[selected_features].apply(pd.to_numeric, errors='coerce')
+        X_train = train[exog_features].apply(pd.to_numeric, errors='coerce')
         combined = pd.concat([y_train, X_train], axis=1).dropna()
-        y_train, X_train = combined['open'], combined[selected_features]
+        y_train, X_train = combined['open'], combined[exog_features]
 
-        X_pred = df.loc[[test_date], selected_features].apply(pd.to_numeric, errors='coerce')
+        X_pred = df.loc[[test_date], exog_features].apply(pd.to_numeric, errors='coerce')
         if X_pred.isnull().values.any():
             continue
 
@@ -79,15 +82,15 @@ if ohlcv_file and gt_file and selected_features:
         fig, ax = plt.subplots()
         result_df.plot(marker='o', ax=ax)
         for i, row in result_df.iterrows():
-            ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
-            ax.annotate(f"{row['Predicted']:.2f}", (i, row['Predicted']), textcoords="offset points", xytext=(0, -15), ha='center', fontsize=8)
+            ax.annotate(f"{float(row['Actual']):.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
+            ax.annotate(f"{float(row['Predicted']):.2f}", (i, row['Predicted']), textcoords="offset points", xytext=(0, -15), ha='center', fontsize=8)
         plt.title("Actual vs Predicted 'Open' Prices (Last 5 Trading Days)")
         plt.ylabel("Stock Price")
         plt.grid(True)
         st.pyplot(fig)
 
         # RMSE
-        rmse = mean_squared_error(result_df['Actual'], result_df['Predicted'], squared=False)
+        rmse = np.sqrt(mean_squared_error(result_df['Actual'], result_df['Predicted']))
         st.markdown(f"### 📉 RMSE (Root Mean Squared Error): `{rmse:.4f}`")
 
     else:
