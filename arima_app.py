@@ -9,11 +9,11 @@ import warnings
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-# Replace with your actual GT column name
+# Change this to match your trend column
 gt_col_name = "Microsoft stock"
 
 st.title("📈 ARIMAX Stock Price Predictor")
-st.write("This app uses ARIMAX to forecast next-day stock **Open** price using selected historical features.")
+st.write("This app uses ARIMAX to forecast the next-day stock **Open** price using selected historical features.")
 
 # Upload files
 ohlcv_file = st.file_uploader("Upload OHLCV CSV file", type="csv")
@@ -21,7 +21,11 @@ gt_file = st.file_uploader("Upload Google Trends CSV file", type="csv")
 
 # Feature selection
 all_features = ['open', 'close', 'high', 'low', 'volume', gt_col_name]
-selected_features = st.multiselect("Select features to use for prediction", all_features, default=['close', 'volume', gt_col_name])
+selected_features = st.multiselect(
+    "Select features to use for prediction",
+    all_features,
+    default=['close', 'volume', gt_col_name]
+)
 
 if ohlcv_file and gt_file and selected_features:
     # Read and merge data
@@ -36,71 +40,66 @@ if ohlcv_file and gt_file and selected_features:
         train = df.iloc[:-i].copy()
         test_date = df.iloc[-i:].index[0]
 
-        y_train = pd.to_numeric(train['open'], errors='coerce')
-        X_train = train[selected_features].apply(pd.to_numeric, errors='coerce')
-        combined = pd.concat([y_train, X_train], axis=1).dropna()
-        y_train, X_train = combined['open'], combined[selected_features]
+        # Remove 'open' from selected features if present
+        filtered_features = [feat for feat in selected_features if feat != 'open']
 
-        X_pred = df.loc[[test_date], selected_features].apply(pd.to_numeric, errors='coerce')
+        y_train = pd.to_numeric(train['open'], errors='coerce')
+        X_train = train[filtered_features].apply(pd.to_numeric, errors='coerce')
+        combined = pd.concat([y_train, X_train], axis=1).dropna()
+        y_train, X_train = combined['open'], combined[filtered_features]
+
+        X_pred = df.loc[[test_date], filtered_features].apply(pd.to_numeric, errors='coerce')
         if X_pred.isnull().values.any():
             continue
 
-        model = SARIMAX(endog=y_train, exog=X_train, order=(5, 1, 0),
-                        enforce_stationarity=False, enforce_invertibility=False)
-        result = model.fit(disp=False)
+        try:
+            model = SARIMAX(
+                endog=y_train,
+                exog=X_train,
+                order=(5, 1, 0),
+                enforce_stationarity=False,
+                enforce_invertibility=False
+            )
+            result = model.fit(disp=False)
+            y_pred = result.predict(start=len(y_train), end=len(y_train), exog=X_pred).iloc[0]
+            y_true = df.loc[test_date, 'open']
 
-        y_pred = result.predict(start=len(y_train), end=len(y_train), exog=X_pred).iloc[0]
-        y_true = df.loc[test_date, 'open']
-
-        predictions.append(y_pred)
-        actuals.append(y_true)
-        dates.append(test_date)
+            predictions.append(y_pred)
+            actuals.append(y_true)
+            dates.append(test_date)
+        except Exception as e:
+            st.warning(f"Skipping prediction for {test_date.date()}: {e}")
+            continue
 
     if predictions:
-        # Show selected features and their sources
-        st.subheader("🧠 Features used for training")
-        feature_sources = []
-        for feat in selected_features:
-            if feat in ohlcv_df.columns:
-                source = f'"{feat}" from OHLCV'
-            else:
-                source = f'"{feat}" from Google trend data'
-            feature_sources.append(source)
-        st.markdown("**Selected features:** " + ", ".join(feature_sources))
-
-        # Prepare results
         result_df = pd.DataFrame({
             'Date': dates,
             'Actual': actuals,
             'Predicted': predictions
         }).set_index('Date')
 
-        # Convert to float for annotations
-        result_df['Actual'] = pd.to_numeric(result_df['Actual'], errors='coerce')
-        result_df['Predicted'] = pd.to_numeric(result_df['Predicted'], errors='coerce')
+        # Display selected features with their origin
+        feature_info = []
+        for feat in selected_features:
+            origin = "Google Trend data" if feat == gt_col_name else "OHLCV"
+            feature_info.append(f"**{feat}** from {origin}")
+        st.markdown("**Selected features used for prediction:**<br>" + "<br>".join(feature_info), unsafe_allow_html=True)
 
-        # Plot
+        # Plot Actual vs Predicted
         fig, ax = plt.subplots()
         result_df.plot(marker='o', ax=ax)
-
         for i, row in result_df.iterrows():
-            if not pd.isna(row['Actual']):
-                ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']), textcoords="offset points",
-                            xytext=(0, 10), ha='center', fontsize=8)
-            if not pd.isna(row['Predicted']):
-                ax.annotate(f"{row['Predicted']:.2f}", (i, row['Predicted']), textcoords="offset points",
-                            xytext=(0, -15), ha='center', fontsize=8)
-
+            ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
+            ax.annotate(f"{row['Predicted']:.2f}", (i, row['Predicted']), textcoords="offset points", xytext=(0, -15), ha='center', fontsize=8)
         plt.title("Actual vs Predicted 'Open' Prices (Last 5 Trading Days)")
         plt.ylabel("Stock Price")
         plt.grid(True)
         st.pyplot(fig)
 
-        # Show RMSE
-        rmse = np.sqrt(mean_squared_error(result_df['Actual'], result_df['Predicted']))
-        st.success(f"📉 RMSE of prediction for last 5 days: **{rmse:.4f}**")
-
+        # RMSE
+        rmse = mean_squared_error(result_df['Actual'], result_df['Predicted'], squared=False)
+        st.success(f"📉 RMSE for last 5-day prediction: **{rmse:.4f}**")
     else:
-        st.warning("Prediction failed for some days due to missing values or model issues.")
+        st.warning("Prediction failed for all 5 days due to missing values or model issues.")
 else:
     st.info("Please upload both datasets and select at least one feature.")
