@@ -10,103 +10,102 @@ import warnings
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-# Constants
-gt_col_name = "Microsoft stock"
-
-# Streamlit UI
 st.title("📈 Ensemble Stock Price Predictor (ARIMA + XGBoost)")
-st.write("Forecasts next-day stock **Open** price using a weighted ensemble of ARIMA and XGBoost.")
+st.write("This app forecasts next-day stock **Open** price using an ensemble of ARIMA and XGBoost models.")
 
+# Upload files
 ohlcv_file = st.file_uploader("Upload OHLCV CSV file", type="csv")
 gt_file = st.file_uploader("Upload Google Trends CSV file", type="csv")
 
+# Feature selection
+gt_col_name = "Microsoft stock"
 all_features = ['open', 'close', 'high', 'low', 'volume', gt_col_name]
 selected_features = st.multiselect("Select features to use for prediction", all_features, default=['close', 'volume', gt_col_name])
 
-# Weight sliders
-arima_weight = st.slider("ARIMA Weight", 0.0, 1.0, 0.5, 0.05)
-xgb_weight = 1 - arima_weight
+# Weight slider
+arima_weight = st.slider("ARIMA Weight (%)", 0, 100, 50)
+xgb_weight = 100 - arima_weight
 
-if ohlcv_file and gt_file and selected_features:
+# Trigger button
+trigger = st.button("Press to Run Forecast")
+
+if trigger and ohlcv_file and gt_file and selected_features:
+    # Load and merge data
     ohlcv_df = pd.read_csv(ohlcv_file, parse_dates=['date']).set_index('date')
     gt_df = pd.read_csv(gt_file, parse_dates=['Day']).set_index('Day')
     df = pd.merge(ohlcv_df, gt_df, left_index=True, right_index=True, how='inner')
     df = df[[*ohlcv_df.columns, gt_col_name]].dropna()
-    
-    exog_features = [f for f in selected_features if f != 'open']
 
-    predictions_ensemble, predictions_arima, predictions_xgb, actuals, dates = [], [], [], [], []
+    arima_preds, xgb_preds, actuals, dates = [], [], [], []
 
     for i in range(5, 0, -1):
         train = df.iloc[:-i].copy()
         test_date = df.iloc[-i:].index[0]
 
+        # Prepare data
         y_train = pd.to_numeric(train['open'], errors='coerce')
-        X_train = train[exog_features].apply(pd.to_numeric, errors='coerce')
+        X_train = train[selected_features].apply(pd.to_numeric, errors='coerce')
         combined = pd.concat([y_train, X_train], axis=1).dropna()
-        y_train, X_train = combined['open'], combined[exog_features]
+        y_train, X_train = combined['open'], combined[selected_features]
+        X_pred = df.loc[[test_date], selected_features].apply(pd.to_numeric, errors='coerce')
 
-        X_pred = df.loc[[test_date], exog_features].apply(pd.to_numeric, errors='coerce')
-        if X_pred.isnull().values.any():
+        if y_train.empty or X_train.empty or X_pred.isnull().values.any():
             continue
 
         # ARIMA model
-        model_arima = SARIMAX(endog=y_train, exog=X_train, order=(5, 1, 0),
+        arima_model = SARIMAX(endog=y_train, exog=X_train, order=(5, 1, 0),
                               enforce_stationarity=False, enforce_invertibility=False)
-        result_arima = model_arima.fit(disp=False)
-        pred_arima = result_arima.predict(start=len(y_train), end=len(y_train), exog=X_pred).iloc[0]
+        arima_result = arima_model.fit(disp=False)
+        arima_pred = arima_result.predict(start=len(y_train), end=len(y_train), exog=X_pred).iloc[0]
 
         # XGBoost model
-        model_xgb = XGBRegressor(n_estimators=100, learning_rate=0.1)
-        model_xgb.fit(X_train, y_train)
-        pred_xgb = model_xgb.predict(X_pred)[0]
+        xgb_model = XGBRegressor(n_estimators=100, max_depth=3)
+        xgb_model.fit(X_train, y_train)
+        xgb_pred = xgb_model.predict(X_pred)[0]
 
-        # Final ensemble prediction
-        pred_final = arima_weight * pred_arima + xgb_weight * pred_xgb
-        y_true = df.loc[test_date, 'open']
+        actual = df.loc[test_date, 'open']
+        ensemble_pred = (arima_weight / 100) * arima_pred + (xgb_weight / 100) * xgb_pred
 
-        predictions_arima.append(pred_arima)
-        predictions_xgb.append(pred_xgb)
-        predictions_ensemble.append(pred_final)
-        actuals.append(y_true)
+        arima_preds.append(arima_pred)
+        xgb_preds.append(xgb_pred)
+        actuals.append(actual)
         dates.append(test_date)
 
-    if predictions_ensemble:
-        st.markdown("### ✅ Features Used in This Model:")
-        feature_source_map = {
-            'open': "from OHLCV",
-            'close': "from OHLCV",
-            'high': "from OHLCV",
-            'low': "from OHLCV",
-            'volume': "from OHLCV",
-            gt_col_name: "from Google Trend"
-        }
-        used_feature_labels = [f"**{f}** ({feature_source_map.get(f, 'unknown source')})" for f in selected_features]
-        st.markdown("• " + "<br>• ".join(used_feature_labels), unsafe_allow_html=True)
-
+    # Display results
+    if dates:
         result_df = pd.DataFrame({
             'Date': dates,
             'Actual': actuals,
-            'ARIMA': predictions_arima,
-            'XGBoost': predictions_xgb,
-            'Ensemble': predictions_ensemble
+            'ARIMA': arima_preds,
+            'XGBoost': xgb_preds
         }).set_index('Date')
+        result_df['Ensemble'] = (arima_weight / 100) * result_df['ARIMA'] + (xgb_weight / 100) * result_df['XGBoost']
 
-        result_df = result_df.apply(pd.to_numeric, errors='coerce').dropna()
+        st.markdown("### Features used for training:")
+        for feat in selected_features:
+            origin = "Google Trend" if feat == gt_col_name else "OHLCV"
+            st.markdown(f"- **{feat}** from *{origin}*")
 
+        # Plotting
         fig, ax = plt.subplots()
-        result_df[['Actual', 'Ensemble']].plot(marker='o', ax=ax)
+        result_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(marker='o', ax=ax)
         for i, row in result_df.iterrows():
-            ax.annotate(f"{row['Actual']:.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
-            ax.annotate(f"{row['Ensemble']:.2f}", (i, row['Ensemble']), textcoords="offset points", xytext=(0, -15), ha='center', fontsize=8)
-        plt.title("Actual vs Ensemble Predicted 'Open' Prices (Last 5 Days)")
+            ax.annotate(f"{float(row['Actual']):.2f}", (i, row['Actual']), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8)
+            ax.annotate(f"{float(row['Ensemble']):.2f}", (i, row['Ensemble']), textcoords="offset points", xytext=(0,-15), ha='center', fontsize=8)
+        plt.title("Actual vs Predicted 'Open' Prices (Last 5 Trading Days)")
         plt.ylabel("Stock Price")
         plt.grid(True)
         st.pyplot(fig)
 
-        rmse = np.sqrt(mean_squared_error(result_df['Actual'], result_df['Ensemble']))
-        st.markdown(f"### 📉 Ensemble RMSE: `{rmse:.4f}`")
+        # RMSEs
+        rmse_arima = mean_squared_error(result_df['Actual'], result_df['ARIMA'], squared=False)
+        rmse_xgb = mean_squared_error(result_df['Actual'], result_df['XGBoost'], squared=False)
+        rmse_ensemble = mean_squared_error(result_df['Actual'], result_df['Ensemble'], squared=False)
+
+        st.success(f" **RMSE (ARIMA):** {rmse_arima:.4f}")
+        st.success(f" **RMSE (XGBoost):** {rmse_xgb:.4f}")
+        st.success(f" **RMSE (Ensemble):** {rmse_ensemble:.4f}")
     else:
-        st.warning("Prediction failed for some days due to missing values or model issues.")
-else:
+        st.warning("Prediction failed due to missing or invalid values.")
+elif trigger:
     st.info("Please upload both datasets and select at least one feature.")
