@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_squared_error
-from sklearn.linear_model import LinearRegression
 from xgboost import XGBRegressor
 import warnings
 
@@ -12,7 +11,7 @@ warnings.filterwarnings("ignore")
 
 gt_col_name = "Microsoft stock"
 
-st.title("Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
+st.title("🔮 Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
 st.write("Predicting next-day **Open** prices using selected features from OHLCV + Google Trends via ARIMAX and XGBoost ensemble.")
 
 # File Upload
@@ -26,17 +25,17 @@ selected_features = st.multiselect("Select features for prediction", all_feature
 # Weight slider
 arima_weight = st.slider("ARIMA weight in Ensemble Prediction", 0.0, 1.0, 0.5, 0.05)
 
-# Trigger button
+# Run Button
 trigger = st.button("Run Prediction")
 
 if ohlcv_file and gt_file and selected_features and trigger:
-    # Load and align data
     ohlcv_df = pd.read_csv(ohlcv_file, parse_dates=['date']).set_index('date')
     gt_df = pd.read_csv(gt_file, parse_dates=['Day']).set_index('Day')
+
     df = pd.merge(ohlcv_df, gt_df, left_index=True, right_index=True, how='inner')
     df = df[[*ohlcv_df.columns, gt_col_name]].dropna()
 
-    st.subheader("Features Used")
+    st.subheader("🧠 Features Used")
     used_features = []
     for feat in selected_features:
         if feat in ohlcv_df.columns:
@@ -45,10 +44,8 @@ if ohlcv_file and gt_file and selected_features and trigger:
             used_features.append(f"'{feat}' from Google Trend data")
     st.markdown(", ".join(used_features))
 
-    # Storage
     dates, y_true_list, arima_preds, xgb_preds, ensemble_preds = [], [], [], [], []
 
-    # Predict last 5 trading days
     for i in range(5, 0, -1):
         train = df.iloc[:-i].copy()
         test_date = df.iloc[-i:].index[0]
@@ -63,7 +60,8 @@ if ohlcv_file and gt_file and selected_features and trigger:
             continue
 
         # ARIMA
-        arima_model = SARIMAX(endog=y_train, exog=X_train, order=(5, 1, 0), enforce_stationarity=False, enforce_invertibility=False)
+        arima_model = SARIMAX(endog=y_train, exog=X_train, order=(5, 1, 0),
+                              enforce_stationarity=False, enforce_invertibility=False)
         arima_result = arima_model.fit(disp=False)
         arima_pred = arima_result.predict(start=len(y_train), end=len(y_train), exog=X_test).iloc[0]
 
@@ -72,10 +70,8 @@ if ohlcv_file and gt_file and selected_features and trigger:
         xgb_model.fit(X_train, y_train)
         xgb_pred = xgb_model.predict(X_test)[0]
 
-        # Actual
         actual = df.loc[test_date, 'open']
 
-        # Store results
         dates.append(test_date)
         y_true_list.append(actual)
         arima_preds.append(arima_pred)
@@ -83,7 +79,6 @@ if ohlcv_file and gt_file and selected_features and trigger:
         ensemble_preds.append(arima_weight * arima_pred + (1 - arima_weight) * xgb_pred)
 
     if dates:
-        # Result DataFrame
         results_df = pd.DataFrame({
             'Date': dates,
             'Actual': y_true_list,
@@ -92,38 +87,36 @@ if ohlcv_file and gt_file and selected_features and trigger:
             'Ensemble': ensemble_preds
         }).set_index('Date')
 
-        # RMSE
-        arima_rmse = mean_squared_error(results_df['Actual'], results_df['ARIMA'], squared=False)
-        xgb_rmse = mean_squared_error(results_df['Actual'], results_df['XGBoost'], squared=False)
-        ensemble_rmse = mean_squared_error(results_df['Actual'], results_df['Ensemble'], squared=False)
+        arima_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['ARIMA']))
+        xgb_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['XGBoost']))
+        ensemble_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['Ensemble']))
 
-        # Plot
-        st.subheader(" Forecast Plot (Last 5 Trading Days)")
+        st.subheader("📉 Forecast Plot (Last 5 Trading Days)")
         fig, ax = plt.subplots()
         results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(ax=ax, marker='o')
 
-        # Annotate predictions
         for i, row in results_df.iterrows():
             try:
+                x_pos = results_df.index.get_loc(i)
                 y_actual = float(row['Actual'])
                 y_ensemble = float(row['Ensemble'])
-                ax.annotate(f"{y_actual:.2f}", (i, y_actual), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8)
-                ax.annotate(f"{y_ensemble:.2f}", (i, y_ensemble), textcoords="offset points", xytext=(0,-15), ha='center', fontsize=8)
+                ax.annotate(f"{y_actual:.2f}", (x_pos, y_actual), textcoords="offset points", xytext=(0, 10),
+                            ha='center', fontsize=8)
+                ax.annotate(f"{y_ensemble:.2f}", (x_pos, y_ensemble), textcoords="offset points", xytext=(0, -15),
+                            ha='center', fontsize=8)
             except Exception:
                 continue
 
         plt.title("Actual vs Predicted 'Open' Prices")
-        plt.ylabel("Price")
+        plt.ylabel("Stock Price")
         plt.grid(True)
         st.pyplot(fig)
 
-        # RMSE Display
-        st.subheader(" RMSE Comparison")
+        st.subheader("📊 RMSE Comparison")
         st.markdown(f"- **ARIMA RMSE:** {arima_rmse:.4f}")
         st.markdown(f"- **XGBoost RMSE:** {xgb_rmse:.4f}")
         st.markdown(f"- **Ensemble RMSE:** {ensemble_rmse:.4f}")
-
     else:
-        st.warning("Prediction failed due to missing values or model fitting issues.")
+        st.warning("Prediction failed. Check for missing or inconsistent data.")
 else:
-    st.info("Please upload both datasets, select features, set weight, and press **Run Prediction**.")
+    st.info("Upload data, select features, and click **Run Prediction**.")
