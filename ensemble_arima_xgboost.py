@@ -92,30 +92,20 @@ if ohlcv_file and gt_file and selected_features and trigger:
         ensemble_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['Ensemble']))
 
         st.subheader("📉 Forecast Plot (Last 5 Trading Days)")
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig, ax = plt.subplots()
 
-        ax.plot(results_df.index, results_df['Actual'], label='Actual', marker='o', linewidth=2, color='black')
-        ax.plot(results_df.index, results_df['ARIMA'], label='ARIMA', marker='o', linestyle='--')
-        ax.plot(results_df.index, results_df['XGBoost'], label='XGBoost', marker='o', linestyle='--')
-        ax.plot(results_df.index, results_df['Ensemble'], label='Ensemble', marker='o', linewidth=2)
+        results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(ax=ax, marker='o')
 
-        for i, row in results_df.iterrows():
-            try:
-                ax.annotate(f"{row['Actual']:.2f}", (row.name, row['Actual']), textcoords="offset points",
-                            xytext=(0, 10), ha='center', fontsize=8, color='black')
-                ax.annotate(f"{row['Ensemble']:.2f}", (row.name, row['Ensemble']), textcoords="offset points",
-                            xytext=(0, -15), ha='center', fontsize=8, color='green')
-            except Exception:
-                continue
+        # Dynamically adjust y-axis range
+        y_min = results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].min().min()
+        y_max = results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].max().max()
+        y_margin = (y_max - y_min) * 0.1
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
 
-        ax.set_title("Actual vs Predicted 'Open' Prices")
         ax.set_ylabel("Stock Price")
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.2f}'))
-        ax.set_xticks(results_df.index)
-        ax.set_xticklabels(results_df.index.strftime('%Y-%m-%d'), rotation=45, ha='right')
-        ax.grid(True)
-        ax.legend()
-        plt.tight_layout()
+        ax.set_title("Actual vs Predicted 'Open' Prices")
+        plt.xticks(rotation=45)
+        plt.grid(True)
         st.pyplot(fig)
 
         st.subheader("📊 RMSE Comparison")
