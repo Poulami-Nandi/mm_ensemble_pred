@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 
 gt_col_name = "Microsoft stock"
 
-st.title("Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
+st.title("🔮 Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
 st.write("Predicting next-day **Open** prices using selected features from OHLCV + Google Trends via ARIMAX and XGBoost ensemble.")
 
 # File Upload
@@ -35,7 +35,7 @@ if ohlcv_file and gt_file and selected_features and trigger:
     df = pd.merge(ohlcv_df, gt_df, left_index=True, right_index=True, how='inner')
     df = df[[*ohlcv_df.columns, gt_col_name]].dropna()
 
-    st.subheader(" Features Used")
+    st.subheader("🧠 Features Used")
     used_features = []
     for feat in selected_features:
         if feat in ohlcv_df.columns:
@@ -92,7 +92,8 @@ if ohlcv_file and gt_file and selected_features and trigger:
         ensemble_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['Ensemble']))
 
         st.subheader("📉 Forecast Plot (Last 5 Trading Days)")
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(8, 5))
+
         ax.plot(results_df.index, results_df['Actual'], label='Actual', marker='o', linewidth=2, color='black')
         ax.plot(results_df.index, results_df['ARIMA'], label='ARIMA', marker='o', linestyle='--')
         ax.plot(results_df.index, results_df['XGBoost'], label='XGBoost', marker='o', linestyle='--')
@@ -100,23 +101,24 @@ if ohlcv_file and gt_file and selected_features and trigger:
 
         for i, row in results_df.iterrows():
             try:
-                x_pos = results_df.index.get_loc(i)
-                y_actual = float(row['Actual'])
-                y_ensemble = float(row['Ensemble'])
-                ax.annotate(f"{y_actual:.2f}", (x_pos, y_actual), textcoords="offset points", xytext=(0, 10),
-                            ha='center', fontsize=8)
-                ax.annotate(f"{y_ensemble:.2f}", (x_pos, y_ensemble), textcoords="offset points", xytext=(0, -15),
-                            ha='center', fontsize=8)
+                ax.annotate(f"{row['Actual']:.2f}", (row.name, row['Actual']), textcoords="offset points",
+                            xytext=(0, 10), ha='center', fontsize=8, color='black')
+                ax.annotate(f"{row['Ensemble']:.2f}", (row.name, row['Ensemble']), textcoords="offset points",
+                            xytext=(0, -15), ha='center', fontsize=8, color='green')
             except Exception:
                 continue
 
         ax.set_title("Actual vs Predicted 'Open' Prices")
         ax.set_ylabel("Stock Price")
-        ax.legend()
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.2f}'))
+        ax.set_xticks(results_df.index)
+        ax.set_xticklabels(results_df.index.strftime('%Y-%m-%d'), rotation=45, ha='right')
         ax.grid(True)
+        ax.legend()
+        plt.tight_layout()
         st.pyplot(fig)
 
-        st.subheader(" RMSE Comparison")
+        st.subheader("📊 RMSE Comparison")
         st.markdown(f"- **ARIMA RMSE:** {arima_rmse:.4f}")
         st.markdown(f"- **XGBoost RMSE:** {xgb_rmse:.4f}")
         st.markdown(f"- **Ensemble RMSE:** {ensemble_rmse:.4f}")
