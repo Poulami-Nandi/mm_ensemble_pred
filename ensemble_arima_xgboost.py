@@ -87,23 +87,29 @@ if ohlcv_file and gt_file and selected_features and trigger:
             'Ensemble': ensemble_preds
         }).set_index('Date')
 
-        arima_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['ARIMA']))
-        xgb_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['XGBoost']))
-        ensemble_rmse = np.sqrt(mean_squared_error(results_df['Actual'], results_df['Ensemble']))
+        # Ensure numeric values for proper plotting
+        for col in ['Actual', 'ARIMA', 'XGBoost', 'Ensemble']:
+            results_df[col] = pd.to_numeric(results_df[col], errors='coerce')
 
+        plot_df = results_df.dropna(subset=['Actual', 'ARIMA', 'XGBoost', 'Ensemble'])
+
+        arima_rmse = np.sqrt(mean_squared_error(plot_df['Actual'], plot_df['ARIMA']))
+        xgb_rmse = np.sqrt(mean_squared_error(plot_df['Actual'], plot_df['XGBoost']))
+        ensemble_rmse = np.sqrt(mean_squared_error(plot_df['Actual'], plot_df['Ensemble']))
+
+        # Plot
         st.subheader("📉 Forecast Plot (Last 5 Trading Days)")
         fig, ax = plt.subplots()
 
-        results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(ax=ax, marker='o')
+        plot_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(ax=ax, marker='o')
 
-        # Dynamically adjust y-axis range
-        y_min = results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].min().min()
-        y_max = results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].max().max()
+        y_min = plot_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].min().min()
+        y_max = plot_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].max().max()
         y_margin = (y_max - y_min) * 0.1
         ax.set_ylim(y_min - y_margin, y_max + y_margin)
 
-        ax.set_ylabel("Stock Price")
-        ax.set_title("Actual vs Predicted 'Open' Prices")
+        plt.ylabel("Stock Price")
+        plt.title("Actual vs Predicted 'Open' Prices")
         plt.xticks(rotation=45)
         plt.grid(True)
         st.pyplot(fig)
