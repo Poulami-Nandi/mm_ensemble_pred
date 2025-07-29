@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 
 gt_col_name = "Microsoft stock"
 
-st.title("🔮 Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
+st.title("Ensemble Forecast: ARIMA + XGBoost for Stock 'Open' Price")
 st.write("Predicting next-day **Open** prices using selected features from OHLCV + Google Trends via ARIMAX and XGBoost ensemble.")
 
 # File Upload
@@ -35,7 +35,7 @@ if ohlcv_file and gt_file and selected_features and trigger:
     df = pd.merge(ohlcv_df, gt_df, left_index=True, right_index=True, how='inner')
     df = df[[*ohlcv_df.columns, gt_col_name]].dropna()
 
-    st.subheader("🧠 Features Used")
+    st.subheader(" Features Used")
     used_features = []
     for feat in selected_features:
         if feat in ohlcv_df.columns:
@@ -93,7 +93,10 @@ if ohlcv_file and gt_file and selected_features and trigger:
 
         st.subheader("📉 Forecast Plot (Last 5 Trading Days)")
         fig, ax = plt.subplots()
-        results_df[['Actual', 'ARIMA', 'XGBoost', 'Ensemble']].plot(ax=ax, marker='o')
+        ax.plot(results_df.index, results_df['Actual'], label='Actual', marker='o', linewidth=2, color='black')
+        ax.plot(results_df.index, results_df['ARIMA'], label='ARIMA', marker='o', linestyle='--')
+        ax.plot(results_df.index, results_df['XGBoost'], label='XGBoost', marker='o', linestyle='--')
+        ax.plot(results_df.index, results_df['Ensemble'], label='Ensemble', marker='o', linewidth=2)
 
         for i, row in results_df.iterrows():
             try:
@@ -107,12 +110,13 @@ if ohlcv_file and gt_file and selected_features and trigger:
             except Exception:
                 continue
 
-        plt.title("Actual vs Predicted 'Open' Prices")
-        plt.ylabel("Stock Price")
-        plt.grid(True)
+        ax.set_title("Actual vs Predicted 'Open' Prices")
+        ax.set_ylabel("Stock Price")
+        ax.legend()
+        ax.grid(True)
         st.pyplot(fig)
 
-        st.subheader("📊 RMSE Comparison")
+        st.subheader(" RMSE Comparison")
         st.markdown(f"- **ARIMA RMSE:** {arima_rmse:.4f}")
         st.markdown(f"- **XGBoost RMSE:** {xgb_rmse:.4f}")
         st.markdown(f"- **Ensemble RMSE:** {ensemble_rmse:.4f}")
