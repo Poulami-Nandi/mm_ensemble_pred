@@ -37,9 +37,6 @@ class StockForecastPipeline:
             print(f"Downloading OHLCV data for {self.ticker}...")
             df = yf.download(self.ticker, start=self.start_date, end=self.end_date)
 
-            if len(df) < 1250:
-                raise ValueError(f"Not enough data for {self.ticker}. Found {len(df)} rows.")
-
             df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
             df = df.dropna(how='any')
             df.index = pd.to_datetime(df.index)
