@@ -1,86 +1,96 @@
 import sys
 import os
 
-# Add 'utils' directory to Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
-
-from stock_forecast_pipeline import StockForecastPipeline
 import streamlit as st
 import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Streamlit configuration
-st.set_page_config(page_title="📊 Stock Forecasting", layout="wide")
-st.title("📈 Stock Price Forecasting using ARIMA, XGBoost & Ensemble")
+# Add 'utils' directory to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+from stock_forecast_pipeline import StockForecastPipeline
 
-# Sidebar inputs
-st.sidebar.header("Configure Forecast")
-ticker = st.sidebar.text_input("Enter NYSE Stock Ticker", "AAPL").strip().upper()
-arima_weight_pct = st.sidebar.slider("ARIMA Model Weight (%)", 0, 100, 50)
+st.set_page_config(layout="wide")
+st.title("📈 Multimodal Stock Price Forecast using ARIMA + XGBoost Ensemble")
 
-feature_list = [
-    "return_1d", "ema_20", "volatility_10d",
-    "trend_7d_ma", "trend_rolling_max_50d", "trend_return",
-    "high", "low", "close", "volume"
-]
-selected_features = st.sidebar.multiselect(
-    "Select Features to Include",
-    options=feature_list,
-    default=[
-        "return_1d", "ema_20", "volatility_10d",
-        "trend_7d_ma", "trend_rolling_max_50d", "trend_return"
-    ]
-)
+# --- User Inputs ---
+ticker = st.text_input("Enter NYSE Stock Ticker:", value="AAPL")
+arima_weight_pct = st.slider("ARIMA Weight (%)", min_value=0, max_value=100, value=50)
 
-if st.sidebar.button("🔍 Run Forecast"):
-    try:
-        arima_weight = arima_weight_pct / 100
-        end_date = datetime.date.today()
-        start_date = end_date - datetime.timedelta(days=5 * 365)
-        forecast_days = 5
+arima_weight = arima_weight_pct / 100
+xgb_weight = 1 - arima_weight
 
-        with st.spinner("Processing data and training models..."):
-            pipeline = StockForecastPipeline(ticker, start_date, end_date, arima_weight=arima_weight)
-            pipeline.download_ohlcv_data()
-            df_ohlcv = pd.read_csv(pipeline.ohlcv_path, index_col=0, parse_dates=True)
-            pipeline.generate_google_trend_data(df_ohlcv)
-            pipeline.derive_features()
-            df = pipeline.load_data()
+st.markdown(f"**Using ARIMA weight:** {arima_weight:.2f}, **XGBoost weight:** {xgb_weight:.2f}")
 
-            data = pipeline.train_test_split_rolling(df, selected_features, n_forecasts=forecast_days)
-            result_df = pipeline.predict(data)
-            rmse_arima, rmse_xgb, rmse_ensemble = pipeline.evaluate(result_df)
+end_date = datetime.date.today()
+start_date = end_date - datetime.timedelta(days=1 * 365)
 
-        st.subheader(f"📊 Forecast for Last {forecast_days} Trading Days")
-        st.dataframe(result_df.style.format("{:.2f}"))
+# --- Feature Selection UI ---
+st.header("🧠 Feature Selection by Data Type")
 
-        # Plot forecast
-        fig1, ax1 = plt.subplots(figsize=(10, 5))
-        ax1.plot(result_df.index, result_df["actual"], label="Actual", color="black", linewidth=2)
-        ax1.plot(result_df.index, result_df["arima_pred"], label="ARIMA", linestyle="--")
-        ax1.plot(result_df.index, result_df["xgb_pred"], label="XGBoost", linestyle="-.", color="orangered")
-        ax1.plot(result_df.index, result_df["ensemble_pred"], label="Ensemble", color="green")
-        ax1.set_title(f"{ticker} Price Forecast (Last {forecast_days} Days)")
-        ax1.set_xticks(result_df.index)
-        ax1.set_xticklabels([d.strftime("%Y-%m-%d") for d in result_df.index], rotation=45)
-        ax1.legend()
-        ax1.grid(True)
-        st.pyplot(fig1)
+with st.expander("📊 OHLCV Raw Data Features"):
+    ohlcv_raw_feats = st.multiselect("Select OHLCV Raw Features:", ["open", "high", "low", "close", "volume"], default=["high", "low"])
 
-        # Feature importance
-        st.subheader("📌 Feature Importance")
-        feat_df = pipeline.feature_importance()
-        st.dataframe(feat_df)
+with st.expander("📈 OHLCV Derived Features"):
+    ohlcv_derived_feats = st.multiselect("Select OHLCV Derived Features:", ["return_1d", "ema_20", "volatility_10d"], default=["return_1d", "ema_20"])
+
+with st.expander("🔍 Google Trend Raw Data"):
+    trend_raw_feats = st.multiselect("Select Google Trend Raw Feature:", [f"{ticker.upper()}_trend"], default=[])
+
+with st.expander("🧪 Google Trend Derived Features"):
+    trend_derived_feats = st.multiselect("Select Google Trend Derived Features:", ["trend_7d_ma", "trend_rolling_max_50d", "trend_return"], default=["trend_7d_ma"])
+
+selected_features = ohlcv_raw_feats + ohlcv_derived_feats + trend_raw_feats + trend_derived_feats
+
+if not selected_features:
+    st.warning("Please select at least one feature to proceed.")
+    st.stop()
+
+# --- Run Forecast Pipeline ---
+
+if st.button("Run Forecast", use_container_width=True):
+    with st.spinner("Running forecasts and training models..."):
+        pipeline = StockForecastPipeline(ticker, start_date, end_date, arima_weight=arima_weight)
+        pipeline.download_ohlcv_data()
+        ohlcv_df = pd.read_csv(pipeline.ohlcv_path, index_col=0, parse_dates=True)
+        pipeline.generate_google_trend_data(ohlcv_df)
+        pipeline.derive_features()
+        df = pipeline.load_data()
+
+        rolling_data = pipeline.train_test_split_rolling(df, selected_features, n_forecasts=5)
+        results = pipeline.predict(rolling_data)
+        rmse_arima, rmse_xgb, rmse_ensemble = pipeline.evaluate(results)
+
+        # --- Plot Results ---
+        st.subheader("📉 Forecasted vs Actual Price")
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(results.index, results["actual"], label="Actual", color="black", linewidth=2)
+        ax.plot(results.index, results["arima_pred"], label="ARIMA", linestyle="--")
+        ax.plot(results.index, results["xgb_pred"], label="XGBoost", linestyle="-.", color="orangered")
+        ax.plot(results.index, results["ensemble_pred"], label="Ensemble", color="green")
+
+        ax.set_title(f"{ticker.upper()} Forecast (Last {len(results)} Days)")
+        ax.set_xticks(results.index)
+        ax.set_xticklabels([d.strftime("%Y-%m-%d") for d in results.index], rotation=45)
+        ax.grid(True)
+        ax.legend()
+        st.pyplot(fig)
+
+        # --- RMSE ---
+        st.success(f"RMSE (ARIMA): {rmse_arima:.4f}, XGBoost: {rmse_xgb:.4f}, Ensemble: {rmse_ensemble:.4f}")
+
+        # --- Feature Importance ---
+        st.subheader("🔎 Feature Importance Comparison")
+        feat_imp_df = pipeline.feature_importance()
+        st.dataframe(feat_imp_df.sort_values("Ensemble (%)", ascending=False))
 
         fig2, ax2 = plt.subplots(figsize=(10, 5))
-        feat_df.plot(kind="bar", ax=ax2)
+        feat_imp_df.plot(kind='bar', ax=ax2)
         ax2.set_ylabel("Importance (%)")
-        ax2.set_xticklabels(feat_df.index, rotation=45)
-        ax2.set_title("Feature Contribution by Model")
+        ax2.set_title("Feature Importance by Model")
         ax2.grid(True)
         st.pyplot(fig2)
 
-    except Exception as e:
-        st.error(f"Something went wrong: {e}")
-        st.exception(e)
+
+
+
