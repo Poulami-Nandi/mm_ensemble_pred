@@ -4,6 +4,18 @@ import streamlit as st
 import datetime
 import pandas as pd
 
+st.markdown(
+    """
+    <style>
+    .stMultiSelect span {
+        white-space: normal !important;
+        word-break: break-word !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # Add 'utils' folder to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 from stock_forecast_pipeline import StockForecastPipeline
