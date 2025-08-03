@@ -37,7 +37,7 @@ if get_feat:
 
     # Get all features by category
     all_features = df.columns.tolist()
-    st.session_state.ohlcv = [col for col in ['open', 'high', 'low', 'close', 'volume'] if col in all_features]
+    st.session_state.ohlcv = [col for col in ['open', 'high', 'low', 'close', 'volume'] if col in all_features and col != 'open']
     st.session_state.ohlcv_der = [col for col in all_features if col not in st.session_state.ohlcv and '_trend' not in col and 'trend_' not in col]
     st.session_state.gt = [col for col in all_features if col.endswith('_trend')]
     st.session_state.gt_derived = [col for col in all_features if col.startswith('trend_') and not col.endswith('_trend')]
