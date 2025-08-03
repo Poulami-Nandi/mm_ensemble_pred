@@ -1,122 +1,112 @@
+import streamlit as st
 import os
 import sys
-import streamlit as st
 import datetime
 import pandas as pd
+import matplotlib.pyplot as plt
 
-st.markdown(
-    """
-    <style>
-    /* Keep multiselect in a single line with horizontal scroll */
-    .stMultiSelect div[data-baseweb="tag"] {
-        max-width: 100%;
-        overflow-x: auto;
-        white-space: nowrap;
-        display: block;
-    }
-
-    .stMultiSelect span {
-        white-space: nowrap;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# Add 'utils' folder to Python path
+# Add 'utils' directory to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
+
 from stock_forecast_pipeline import StockForecastPipeline
 
-st.set_page_config(page_title="📈 Multimodal Stock Forecast", layout="wide")
-st.title("📊 Multimodal Ensemble Stock Forecasting Dashboard")
+st.set_page_config(page_title="📈 Multimodal Ensemble Stock Forecast", layout="wide")
+st.title("📈 Multimodal Ensemble Stock Forecast")
 
-# Sidebar Inputs
-st.sidebar.header("⚙️ Forecast Configuration")
-ticker = st.sidebar.text_input("NYSE Stock Ticker (1Y history)", value="AAPL").upper()
-arima_weight_pct = st.sidebar.slider("ARIMA Weight (%)", 0, 100, 50)
-arima_weight = arima_weight_pct / 100
-xgb_weight = 1 - arima_weight
-forecast_days = 5
+# Sidebar: Forecast Configuration
+st.sidebar.header("📊 Forecast Configuration")
+ticker = st.sidebar.text_input("NYSE Stock Ticker (1Y history)", value="AAPL")
+arima_weight = st.sidebar.slider("ARIMA Weight (%)", 0, 100, 50)
 
-# Dates
-end_date = datetime.date.today()
-start_date = end_date - datetime.timedelta(days=1 * 365)
+# Button: Get Features
+if st.sidebar.button("📂 Get Features"):
+    with st.spinner("Loading feature sets..."):
+        start_date = (datetime.datetime.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        end_date = datetime.datetime.today().strftime("%Y-%m-%d")
 
-# Session State
-if "feature_sets" not in st.session_state:
-    st.session_state.feature_sets = {}
-if "pipeline" not in st.session_state:
-    st.session_state.pipeline = None
-if "df" not in st.session_state:
-    st.session_state.df = None
+        pipeline = StockForecastPipeline(ticker, start_date, end_date, arima_weight)
+        pipeline.download_ohlcv_data()
+        ohlcv_df = pd.read_csv(pipeline.ohlcv_path, index_col=0, parse_dates=True)
+        pipeline.generate_google_trend_data(ohlcv_df)
+        pipeline.derive_features()
+        df = pipeline.load_data()
 
-# Step 1: Get Features
-if st.sidebar.button("🔍 Get Features"):
-    try:
-        with st.spinner("Loading data and extracting features..."):
-            pipeline = StockForecastPipeline(ticker, start_date, end_date, arima_weight)
-            pipeline.download_ohlcv_data()
-            ohlcv_df = pd.read_csv(pipeline.ohlcv_path, index_col=0, parse_dates=True)
-            pipeline.generate_google_trend_data(ohlcv_df)
-            pipeline.derive_features()
-            df = pipeline.load_data()
+        st.session_state.pipeline = pipeline
+        st.session_state.df = df
+        st.session_state.available_features = df.columns.tolist()
 
-            all_features = [col for col in df.columns if col.lower() != "open"]
+        # Divide into 4 groups
+        st.session_state.ohlcv_features = ['open', 'high', 'low', 'close', 'volume']
+        st.session_state.ohlcv_derived = [f for f in df.columns if f not in st.session_state.ohlcv_features and "_trend" not in f]
+        st.session_state.gt_features = [f for f in df.columns if f.lower().endswith("_trend") and "derived" not in f]
+        st.session_state.gt_derived = [f for f in df.columns if "_trend" in f and f not in st.session_state.gt_features]
 
-            ohlcv_features = ["high", "low", "close", "volume"]
-            ohlcv_derived = [f for f in all_features if f in ["return_1d", "ema_20", "volatility_10d"]]
-            gt_features = [f for f in all_features if f == f"{ticker}_trend"]
-            gt_derived = [f for f in all_features if f in ["trend_7d_ma", "trend_rolling_max_50d", "trend_return"]]
-
-            st.session_state.feature_sets = {
-                "ohlcv": ohlcv_features,
-                "ohlcv_derived": ohlcv_derived,
-                "gt": gt_features,
-                "gt_derived": gt_derived
-            }
-            st.session_state.pipeline = pipeline
-            st.session_state.df = df
         st.success("Feature sets loaded. Please select features below.")
-    except Exception as e:
-        st.error(f"Error: {e}")
 
-# Step 2: Show Feature Selection if features loaded
-if st.session_state.feature_sets:
-    st.markdown("## 🧩 Select Features for Prediction")
+# Feature Selection UI
+if "available_features" in st.session_state:
+    st.subheader("🧠 Select Features for Prediction")
 
-    selected_ohlcv = st.multiselect("OHLCV Features", st.session_state.feature_sets["ohlcv"], default=["low", "high"])
-    selected_ohlcv_derived = st.multiselect("OHLCV Derived Features", st.session_state.feature_sets["ohlcv_derived"], default=st.session_state.feature_sets["ohlcv_derived"])
-    selected_gt = st.multiselect("Google Trend Features", st.session_state.feature_sets["gt"], default=st.session_state.feature_sets["gt"])
-    selected_gt_derived = st.multiselect("Google Trend Derived Features", st.session_state.feature_sets["gt_derived"], default=st.session_state.feature_sets["gt_derived"])
+    col1, col2 = st.columns(2)
+    col3, col4 = st.columns(2)
+
+    with col1:
+        selected_ohlcv = st.multiselect("OHLCV Features", options=st.session_state.ohlcv_features,
+                                        default=["low", "high"], label_visibility="visible", key="ohlcv")
+
+    with col2:
+        selected_ohlcv_derived = st.multiselect("OHLCV Derived Features", options=st.session_state.ohlcv_derived,
+                                                default=["return_1d", "ema_20", "volatility_10d"],
+                                                label_visibility="visible", key="ohlcv_der")
+
+    with col3:
+        selected_gt = st.multiselect("Google Trend Features", options=st.session_state.gt_features,
+                                     default=[f"{ticker.upper()}_trend"], label_visibility="visible", key="gt")
+
+    with col4:
+        selected_gt_derived = st.multiselect("Google Trend Derived Features", options=st.session_state.gt_derived,
+                                             default=["trend_7d_ma", "trend_rolling_max_50d", "trend_return"],
+                                             label_visibility="visible", key="gt_der")
 
     selected_features = selected_ohlcv + selected_ohlcv_derived + selected_gt + selected_gt_derived
 
-    # Step 3: Prediction
-    if st.button("✅ Get Prediction"):
+    if st.button("✅ Get Prediction", use_container_width=True):
         if not selected_features:
-            st.warning("Please select at least one feature to proceed.")
+            st.warning("Please select at least one feature.")
         else:
-            try:
-                with st.spinner("Running ensemble prediction pipeline..."):
-                    data = st.session_state.pipeline.train_test_split_rolling(
-                        st.session_state.df,
-                        selected_features,
-                        n_forecasts=forecast_days
-                    )
-                    result_df = st.session_state.pipeline.predict(data)
-                    rmse_arima, rmse_xgb, rmse_ensemble = st.session_state.pipeline.evaluate(result_df)
+            with st.spinner("Running forecasts and training models..."):
+                pipeline = st.session_state.pipeline
+                df = st.session_state.df
 
-                    st.subheader(f"📈 Forecast Results (Last {forecast_days} Trading Days)")
-                    st.dataframe(result_df.style.format("{:.2f}"))
+                data = pipeline.train_test_split_rolling(df, selected_features)
+                result_df = pipeline.predict(data)
+                rmse_arima, rmse_xgb, rmse_ensemble = pipeline.evaluate(result_df)
+                fi_df = pipeline.get_feature_importance(result_df, selected_features)
 
-                    st.markdown("### 📉 Prediction Plot")
-                    st.session_state.pipeline.plot(result_df)
+            # Forecast Table
+            st.subheader(f"📊 Forecast Results (Last {len(result_df)} Trading Days)")
+            st.dataframe(result_df.style.format("{:.2f}"))
 
-                    st.markdown("### 🧠 Feature Importance")
-                    fi_df = st.session_state.pipeline.feature_importance()
-                    st.dataframe(fi_df.style.format("{:.2f}"))
-                    st.session_state.pipeline.plot_feature_importance(fi_df)
+            # RMSE
+            st.markdown("### 📉 RMSE Scores")
+            st.write(f"**ARIMA RMSE:** {rmse_arima:.4f}")
+            st.write(f"**XGBoost RMSE:** {rmse_xgb:.4f}")
+            st.write(f"**Ensemble RMSE:** {rmse_ensemble:.4f}")
 
-            except Exception as e:
-                st.error(f"Prediction Error: {e}")
+            # Plot
+            st.markdown("### 📈 Prediction Plot")
+            fig, ax = plt.subplots(figsize=(12, 4))
+            ax.plot(result_df["date"], result_df["actual"], label="Actual", color="black")
+            ax.plot(result_df["date"], result_df["arima_pred"], label="ARIMA", linestyle="--")
+            ax.plot(result_df["date"], result_df["xgb_pred"], label="XGBoost", linestyle="dashdot")
+            ax.plot(result_df["date"], result_df["ensemble_pred"], label="Ensemble", color="green")
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Price")
+            ax.set_title(f"{ticker.upper()} Price Forecast (Last {len(result_df)} Days)")
+            ax.legend()
+            ax.tick_params(axis="x", rotation=45)
+            st.pyplot(fig)
+
+            # Feature Importance
+            st.markdown("### 🧠 Feature Importance")
+            st.dataframe(fi_df.style.format("{:.2f}"))
