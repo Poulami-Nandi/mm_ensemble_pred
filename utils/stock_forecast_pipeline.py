@@ -79,30 +79,55 @@ class StockForecastPipeline:
         df_gt.to_csv(os.path.join(self.data_dir, f"derived_{os.path.basename(self.gt_path)}"))
 
     def load_data(self):
+        # Load original OHLCV data
         ohlcv_df = pd.read_csv(self.ohlcv_path, index_col=0, parse_dates=True)
         ohlcv_df.index = pd.to_datetime(ohlcv_df.index, errors='coerce')
         ohlcv_df = ohlcv_df[~ohlcv_df.index.isna()]
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             ohlcv_df[col] = pd.to_numeric(ohlcv_df[col], errors='coerce')
 
-        df_ohlcv_der = pd.read_csv(os.path.join(self.data_dir, f"derived_{os.path.basename(self.ohlcv_path)}"),
-                                   index_col=0, parse_dates=True)
+        # Load derived OHLCV data
+        df_ohlcv_der = pd.read_csv(
+            os.path.join(self.data_dir, f"derived_{os.path.basename(self.ohlcv_path)}"),
+            index_col=0, parse_dates=True
+        )
         df_ohlcv_der.index = pd.to_datetime(df_ohlcv_der.index, errors='coerce')
         df_ohlcv_der = df_ohlcv_der[~df_ohlcv_der.index.isna()]
 
-        df_gt_der = pd.read_csv(os.path.join(self.data_dir, f"derived_{os.path.basename(self.gt_path)}"),
-                                index_col=0, parse_dates=True)
+        # Load derived Google Trends data
+        df_gt_der = pd.read_csv(
+            os.path.join(self.data_dir, f"derived_{os.path.basename(self.gt_path)}"),
+            index_col=0, parse_dates=True
+        )
         df_gt_der.index = pd.to_datetime(df_gt_der.index, errors='coerce')
         df_gt_der = df_gt_der[~df_gt_der.index.isna()]
 
-        common_index = ohlcv_df.index.intersection(df_ohlcv_der.index).intersection(df_gt_der.index)
+        # Load raw Google Trend column to include the original search volume
+        df_gt_raw = pd.read_csv(self.gt_path, index_col=0, parse_dates=True)
+        df_gt_raw.index = pd.to_datetime(df_gt_raw.index, errors='coerce')
+        df_gt_raw = df_gt_raw[~df_gt_raw.index.isna()]
+        df_gt_raw = df_gt_raw[[self.gt_col]].copy()
+
+        # Align all dataframes to common dates
+        common_index = ohlcv_df.index \
+            .intersection(df_ohlcv_der.index) \
+            .intersection(df_gt_der.index) \
+            .intersection(df_gt_raw.index)
+
         ohlcv_df = ohlcv_df.loc[common_index]
         df_ohlcv_der = df_ohlcv_der.loc[common_index]
         df_gt_der = df_gt_der.loc[common_index]
+        df_gt_raw = df_gt_raw.loc[common_index]
 
-        df = pd.concat([ohlcv_df[['Open', 'High', 'Low', 'Close', 'Volume']].rename(columns=str.lower),
-                        df_ohlcv_der, df_gt_der], axis=1).dropna()
+        # Combine all feature sources
+        df = pd.concat([
+            ohlcv_df[['Open', 'High', 'Low', 'Close', 'Volume']].rename(columns=str.lower),
+            df_ohlcv_der,
+            df_gt_raw,
+            df_gt_der
+        ], axis=1).dropna()
 
+        # Try to set frequency if possible
         try:
             inferred_freq = pd.infer_freq(df.index)
             if inferred_freq:
@@ -111,6 +136,7 @@ class StockForecastPipeline:
             pass
 
         return df
+
 
     def train_test_split_rolling(self, df, selected_features, target="open", n_forecasts=30):
         rolling_data = []
