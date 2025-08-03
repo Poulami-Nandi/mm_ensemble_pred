@@ -13,7 +13,7 @@ st.title("📊 Multimodal Ensemble Stock Forecasting Dashboard")
 
 # Sidebar Inputs
 st.sidebar.header("⚙️ Forecast Configuration")
-ticker = st.sidebar.text_input("NYSE Stock Ticker (5Y history)", value="AAPL").upper()
+ticker = st.sidebar.text_input("NYSE Stock Ticker (1Y history)", value="AAPL").upper()
 arima_weight_pct = st.sidebar.slider("ARIMA Weight (%)", 0, 100, 50)
 arima_weight = arima_weight_pct / 100
 xgb_weight = 1 - arima_weight
@@ -21,7 +21,7 @@ forecast_days = 5
 
 # Dates
 end_date = datetime.date.today()
-start_date = end_date - datetime.timedelta(days=5 * 365)
+start_date = end_date - datetime.timedelta(days=1 * 365)
 
 # Session State
 if "feature_sets" not in st.session_state:
@@ -42,9 +42,9 @@ if st.sidebar.button("🔍 Get Features"):
             pipeline.derive_features()
             df = pipeline.load_data()
 
-            all_features = df.columns.tolist()
+            all_features = [col for col in df.columns if col.lower() != "open"]
 
-            ohlcv_features = ["open", "high", "low", "close", "volume"]
+            ohlcv_features = ["high", "low", "close", "volume"]
             ohlcv_derived = [f for f in all_features if f in ["return_1d", "ema_20", "volatility_10d"]]
             gt_features = [f for f in all_features if f == f"{ticker}_trend"]
             gt_derived = [f for f in all_features if f in ["trend_7d_ma", "trend_rolling_max_50d", "trend_return"]]
