@@ -7,14 +7,22 @@ import pandas as pd
 st.markdown(
     """
     <style>
+    /* Keep multiselect in a single line with horizontal scroll */
+    .stMultiSelect div[data-baseweb="tag"] {
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: nowrap;
+        display: block;
+    }
+
     .stMultiSelect span {
-        white-space: normal !important;
-        word-break: break-word !important;
+        white-space: nowrap;
     }
     </style>
     """,
     unsafe_allow_html=True
 )
+
 
 # Add 'utils' folder to Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
