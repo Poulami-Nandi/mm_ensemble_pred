@@ -65,7 +65,7 @@ if st.sidebar.button("🔍 Get Features"):
 if st.session_state.feature_sets:
     st.markdown("## 🧩 Select Features for Prediction")
 
-    selected_ohlcv = st.multiselect("OHLCV Features", st.session_state.feature_sets["ohlcv"], default=["open", "high"])
+    selected_ohlcv = st.multiselect("OHLCV Features", st.session_state.feature_sets["ohlcv"], default=["low", "high"])
     selected_ohlcv_derived = st.multiselect("OHLCV Derived Features", st.session_state.feature_sets["ohlcv_derived"], default=st.session_state.feature_sets["ohlcv_derived"])
     selected_gt = st.multiselect("Google Trend Features", st.session_state.feature_sets["gt"], default=st.session_state.feature_sets["gt"])
     selected_gt_derived = st.multiselect("Google Trend Derived Features", st.session_state.feature_sets["gt_derived"], default=st.session_state.feature_sets["gt_derived"])
