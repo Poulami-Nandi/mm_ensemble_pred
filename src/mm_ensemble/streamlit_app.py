@@ -2,23 +2,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
+from pathlib import Path
+
+# ---- Bootstrap: make sure `src/` is on sys.path when not installed with `pip -e .` ----
+try:
+    from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # type: ignore
+except ModuleNotFoundError:
+    here = Path(__file__).resolve()
+    # Walk upwards and look for a sibling "src/mm_ensemble/utils/paths.py"
+    added = False
+    for parent in [here.parent] + list(here.parents):
+        cand = parent / "src"
+        if (cand / "mm_ensemble" / "utils" / "paths.py").exists():
+            sys.path.insert(0, str(cand))
+            added = True
+            break
+    if not added:
+        raise
+    # retry import after bootstrapping
+    from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # type: ignore
+
+# ============= actual app =============
 import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from pathlib import Path
-import json
 import math
+import json
 
-# use your shared path resolver (no /content hardcodes)
-from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
-
-# reuse your module with training/plotting helpers
-import mm_ensemble.last5_ensemble_plots as lp
+# reuse your module’s logic (feature selection + training + auto weights)
+import mm_ensemble.last5_ensemble_plots as lp  # uses same bootstrap above
 
 st.set_page_config(page_title="mm_ensemble — last-5 demo", layout="wide")
 
-# ---------------------- small helpers ----------------------
+# ---------------------- helpers ----------------------
 
 def _price_col(df: pd.DataFrame, pref: str = "auto") -> str:
     cand = [c.lower() for c in df.columns]
@@ -26,37 +44,26 @@ def _price_col(df: pd.DataFrame, pref: str = "auto") -> str:
         return "adj_close"
     if pref == "close" and "close" in cand:
         return "close"
-    # auto
     return "adj_close" if "adj_close" in cand else ("close" if "close" in cand else cand[0])
 
 def _to_price_series(df: pd.DataFrame, dates, ret_pred, price_col_pref="auto"):
-    """
-    Convert a vector of daily returns into a synthetic price path using the
-    day before the first test date as the baseline.
-    """
     if len(dates) == 0:
-        return np.array([])
+        return np.array([]), np.array([]), "close", float("nan")
     df2 = df.copy()
     df2["ds"] = pd.to_datetime(df2["ds"], errors="coerce")
     pcol = _price_col(df2, price_col_pref)
-    # actual prices for last5
     mask_last5 = df2["ds"].isin(pd.to_datetime(dates))
     actual_price = pd.to_numeric(df2.loc[mask_last5, pcol], errors="coerce").values
-
-    # baseline = price on day before first test date
     d0 = pd.to_datetime(dates[0])
     prev_mask = df2["ds"] < d0
     if not prev_mask.any():
-        # fallback: use first available price
         base = float(pd.to_numeric(df2[pcol], errors="coerce").dropna().iloc[0])
     else:
         base = float(pd.to_numeric(df2.loc[prev_mask, pcol], errors="coerce").dropna().iloc[-1])
-
     ret_pred = np.asarray(ret_pred, dtype=float)
     pred_price = np.zeros_like(ret_pred, dtype=float)
     p = base
     for i, r in enumerate(ret_pred):
-        # simple return to price
         r = 0.0 if not math.isfinite(r) else r
         p = p * (1.0 + r)
         pred_price[i] = p
@@ -87,18 +94,24 @@ def _rmse(a, b):
 
 st.sidebar.title("mm_ensemble — config")
 
-# discover tickers from data/
-available = sorted([p.name for p in (DATA_DIR).iterdir() if p.is_dir() and p.name.upper() in {"SBUX","PFE"}] or ["SBUX","PFE"])
-tickers = st.sidebar.multiselect("Tickers", options=available, default=available)
+# Discover tickers from data/
+available = []
+if DATA_DIR.exists():
+    for p in DATA_DIR.iterdir():
+        if p.is_dir():
+            # filter to known demo tickers if you want: {"SBUX","PFE"}
+            available.append(p.name)
+available = sorted(available) or ["SBUX", "PFE"]
 
+tickers = st.sidebar.multiselect("Tickers", options=available, default=available)
 feature_mode = st.sidebar.selectbox("Feature set", ["Both (compare)", "All inputs", "OHLCV only"], index=0)
-target = st.sidebar.text_input("Target column (keep as is)", value="target_return_1d")
+target = st.sidebar.text_input("Target column", value="target_return_1d")
 holdout_days = st.sidebar.number_input("Holdout days", min_value=3, max_value=10, value=5, step=1)
 price_pref = st.sidebar.selectbox("Price column preference", ["auto", "adj_close", "close"], index=0)
 plot_kind = st.sidebar.selectbox("Plot as", ["Price", "Return"], index=0)
 save_artifacts = st.sidebar.checkbox("Save artifacts into outputs/last5", value=True)
 
-# Allow overriding the module's HOLDOUT_DAYS at runtime (works because that module uses a constant)
+# Propagate holdout-days into the reused module
 lp.HOLDOUT_DAYS = int(holdout_days)
 
 run_btn = st.sidebar.button("Run last-5 predictions")
@@ -109,33 +122,28 @@ st.caption("Uses pre-saved inputs in `data/` and your ensemble (XGB+ARIMA with a
 # ---------------------- main action ----------------------
 
 if run_btn:
-    # prepare outputs base
     out_base = OUTPUTS_DIR / "last5"
     out_base.mkdir(parents=True, exist_ok=True)
 
     for t in tickers:
         st.subheader(f"Ticker: {t}")
 
-        # load dataset (re-using your module function)
         try:
             df = lp._load_dataset(DATA_DIR, t)
         except Exception as e:
             st.error(f"Failed to load dataset for {t}: {e}")
             continue
 
-        # feature selection
         feats_all   = lp._select_all_features(df, target)
         feats_ohlcv = lp._select_ohlcv_features(df, target)
 
-        # compute results
         res_all = res_ohl = None
         if feature_mode in ("Both (compare)", "All inputs"):
             res_all = lp.train_and_predict_last5(df, feats_all, target)
         if feature_mode in ("Both (compare)", "OHLCV only"):
             res_ohl = lp.train_and_predict_last5(df, feats_ohlcv, target)
 
-        # helper to render a single result block (either all-inputs or ohlcv-only)
-        def render_block(name, res, color_hint=None):
+        def render_block(name, res):
             if res is None:
                 return
             dates = pd.to_datetime(res["dates_last5"]).date
@@ -149,7 +157,6 @@ if run_btn:
                 title = f"{t} — {name} — Price (RMSE={rmse_price:.4f})"
                 footer = f"Weights: XGB={w_xgb:.3f}, ARIMA={w_ar:.3f} • Baseline {pcol}={base:.2f}"
                 _plot_series(dates, [act_p, pred_p], ["Actual", "Predicted"], title, y_label="Price", footer=footer)
-                # table preview + optional save
                 tbl = pd.DataFrame({
                     "ds": pd.to_datetime(res["dates_last5"]),
                     "actual_price": act_p,
@@ -157,13 +164,16 @@ if run_btn:
                     "pred_return": y_pred,
                     "true_return": y_true,
                 })
-                st.dataframe(tbl.style.format({"actual_price":"{:.2f}", "pred_price":"{:.2f}", "pred_return":"{:.6f}", "true_return":"{:.6f}"}), use_container_width=True)
+                st.dataframe(
+                    tbl.style.format({"actual_price":"{:.2f}", "pred_price":"{:.2f}",
+                                      "pred_return":"{:.6f}", "true_return":"{:.6f}"}),
+                    use_container_width=True
+                )
                 if save_artifacts:
                     tdir = out_base / t
                     tdir.mkdir(parents=True, exist_ok=True)
                     suffix = "all_inputs" if "All" in name else "ohlcv_only"
                     tbl.to_csv(tdir / f"pred_last5_{suffix}_PRICE.csv", index=False)
-                    # also include metrics json
                     (tdir / f"metrics_{suffix}.json").write_text(json.dumps({
                         "rmse_price": rmse_price,
                         "weights": {"w_xgb": float(w_xgb), "w_arima": float(w_ar)},
@@ -171,7 +181,7 @@ if run_btn:
                         "train_len": int(res["train_len"]), "val_len": int(res["val_len"]), "test_len": int(res["test_len"])
                     }, indent=2), encoding="utf-8")
 
-            else:  # Return plots
+            else:
                 rmse_ret = _rmse(y_true, y_pred)
                 title = f"{t} — {name} — Return (RMSE={rmse_ret:.6f})"
                 footer = f"Weights: XGB={w_xgb:.3f}, ARIMA={w_ar:.3f}"
@@ -194,7 +204,6 @@ if run_btn:
                         "train_len": int(res["train_len"]), "val_len": int(res["val_len"]), "test_len": int(res["test_len"])
                     }, indent=2), encoding="utf-8")
 
-        # render single-mode blocks
         if feature_mode in ("All inputs", "Both (compare)"):
             st.markdown("### All inputs (ensemble)")
             render_block("All inputs", res_all)
@@ -203,10 +212,8 @@ if run_btn:
             st.markdown("### OHLCV only (ensemble)")
             render_block("OHLCV only", res_ohl)
 
-        # if both: show comparison plot (Actual vs OHLCV vs All)
         if feature_mode == "Both (compare)" and (res_all is not None) and (res_ohl is not None):
             st.markdown("### Compare (Actual vs OHLCV vs All)")
-
             dates = pd.to_datetime(res_all["dates_last5"]).date
             if plot_kind == "Price":
                 act_p, pred_all_p, pcol, base = _to_price_series(df, res_all["dates_last5"], res_all["y_ens_last5"], price_pref)
@@ -218,7 +225,6 @@ if run_btn:
                           f"OHLCV: XGB={res_ohl['w_xgb']:.3f}, ARIMA={res_ohl['w_arima']:.3f}")
                 _plot_series(dates, [act_p, pred_ohl_p, pred_all_p],
                              ["Actual", "Pred (OHLCV)", "Pred (All inputs)"], title, y_label="Price", footer=footer)
-
             else:
                 y_true = res_all["y_true_last5"]
                 y_all  = res_all["y_ens_last5"]
@@ -230,15 +236,6 @@ if run_btn:
                           f"OHLCV: XGB={res_ohl['w_xgb']:.3f}, ARIMA={res_ohl['w_arima']:.3f}")
                 _plot_series(dates, [y_true, y_ohl, y_all],
                              ["Actual", "Pred (OHLCV)", "Pred (All inputs)"], title, y_label="Daily Return", footer=footer)
-
         st.divider()
-
 else:
     st.info("Configure options in the sidebar and click **Run last-5 predictions**.")
-    with st.expander("Tips"):
-        st.write(
-            "- Inputs are read from `data/<TICKER>/dataset.parquet` and related files already in your repo.\n"
-            "- Auto-weights are learned on the internal validation slice (same as your scripts).\n"
-            "- Choose **Price** to see price-level plots reconstructed from returns; choose **Return** for raw target plots.\n"
-            "- Enable **Save artifacts** to write CSV/metrics under `outputs/last5/<TICKER>/` (no repo downloads)."
-        )
