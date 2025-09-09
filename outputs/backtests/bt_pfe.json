@@ -1,0 +1,12 @@
+{
+  "CAGR": NaN,
+  "Sharpe": -0.5100541506280715,
+  "MaxDD": -0.08534906875889214,
+  "HitRate": 0.375,
+  "Len": 40,
+  "model": "ensemble",
+  "split": "test",
+  "threshold": 0.0,
+  "tcost_bps": 5.0,
+  "price_col": "adj_close"
+}

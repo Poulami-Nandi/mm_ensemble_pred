@@ -1,0 +1,15 @@
+{
+  "rmse_last5_return": 0.010098418189718404,
+  "weights": {
+    "w_xgb": 0.0,
+    "w_arima": 1.0
+  },
+  "model": {
+    "supervised": "xgb",
+    "arima": "statsmodels"
+  },
+  "feats_count": 16,
+  "train_len": 245,
+  "val_len": 24,
+  "test_len": 5
+}

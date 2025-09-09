@@ -1,0 +1,50 @@
+{
+  "tickers": {
+    "SBUX": {
+      "all_inputs": {
+        "rmse_last5_price": 0.020084479521077232,
+        "weights": {
+          "w_xgb": 0.0,
+          "w_arima": 1.0
+        },
+        "plot_price": "/content/outputs/last5/SBUX/actual_vs_pred_all_inputs_PRICE.png",
+        "csv_price": "/content/outputs/last5/SBUX/pred_last5_all_inputs_PRICE.csv",
+        "csv_return": "/content/outputs/last5/SBUX/pred_last5_all_inputs.csv"
+      },
+      "ohlcv_only": {
+        "rmse_last5_price": 0.020084479521077232,
+        "weights": {
+          "w_xgb": 0.0,
+          "w_arima": 1.0
+        },
+        "plot_price": "/content/outputs/last5/SBUX/actual_vs_pred_ohlcv_only_PRICE.png",
+        "csv_price": "/content/outputs/last5/SBUX/pred_last5_ohlcv_only_PRICE.csv",
+        "csv_return": "/content/outputs/last5/SBUX/pred_last5_ohlcv_only.csv"
+      },
+      "compare_plot_price": "/content/outputs/last5/SBUX/compare_all_vs_ohlcv_PRICE.png"
+    },
+    "PFE": {
+      "all_inputs": {
+        "rmse_last5_price": 0.2468345144068433,
+        "weights": {
+          "w_xgb": 1.0,
+          "w_arima": 0.0
+        },
+        "plot_price": "/content/outputs/last5/PFE/actual_vs_pred_all_inputs_PRICE.png",
+        "csv_price": "/content/outputs/last5/PFE/pred_last5_all_inputs_PRICE.csv",
+        "csv_return": "/content/outputs/last5/PFE/pred_last5_all_inputs.csv"
+      },
+      "ohlcv_only": {
+        "rmse_last5_price": 0.01227210959263256,
+        "weights": {
+          "w_xgb": 0.0,
+          "w_arima": 1.0
+        },
+        "plot_price": "/content/outputs/last5/PFE/actual_vs_pred_ohlcv_only_PRICE.png",
+        "csv_price": "/content/outputs/last5/PFE/pred_last5_ohlcv_only_PRICE.csv",
+        "csv_return": "/content/outputs/last5/PFE/pred_last5_ohlcv_only.csv"
+      },
+      "compare_plot_price": "/content/outputs/last5/PFE/compare_all_vs_ohlcv_PRICE.png"
+    }
+  }
+}
