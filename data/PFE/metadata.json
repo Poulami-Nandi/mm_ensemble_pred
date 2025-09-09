@@ -1,0 +1,8 @@
+{
+  "ticker": "PFE",
+  "keyword": "Pfizer",
+  "period_start": "2024-09-08",
+  "period_end": "2025-09-08",
+  "save": "facts",
+  "trends_chunk_days": 90
+}
