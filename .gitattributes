@@ -1,0 +1,29 @@
+# Normalize line endings for text files
+* text=auto eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+
+# --- Git LFS rules (large binaries) ---
+
+# Data files (inputs) — tracked with LFS
+data/**/*.parquet filter=lfs diff=lfs merge=lfs -text
+data/**/*.csv     filter=lfs diff=lfs merge=lfs -text
+data/**/*.json    filter=lfs diff=lfs merge=lfs -text
+
+# Models (optional; if you commit them)
+data/**/*model_*.pkl filter=lfs diff=lfs merge=lfs -text
+data/**/*model_*.joblib filter=lfs diff=lfs merge=lfs -text
+
+# Outputs (only applies if you commit outputs; .gitignore may exclude these)
+outputs/**/*.png  filter=lfs diff=lfs merge=lfs -text
+outputs/**/*.csv  filter=lfs diff=lfs merge=lfs -text
+outputs/**/*.json filter=lfs diff=lfs merge=lfs -text
+
+# Notebooks / decks / archives (optional)
+notebooks/**/*.ipynb filter=lfs diff=lfs merge=lfs -text
+notebooks/**/*.pptx  filter=lfs diff=lfs merge=lfs -text
+*.zip                filter=lfs diff=lfs merge=lfs -text
