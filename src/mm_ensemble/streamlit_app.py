@@ -8,34 +8,35 @@ from pathlib import Path
 def _ensure_pkg_on_path() -> None:
     """
     Make sure 'mm_ensemble' is importable by adding the correct folder to sys.path.
-    Works for these common layouts:
+    Works for these layouts:
       - repo_root/src/mm_ensemble/...
-      - repo_root/mm_ensemble/...  (plain package without 'src')
+      - repo_root/mm_ensemble/...  (package directly under root)
     """
     here = Path(__file__).resolve()
 
-    # Build a set of candidate directories to add to sys.path
-    cand_paths = []
-    parents = [here.parent] + list(here.parents)
-    for p in parents:
-        # Case A: the parent itself is the 'src' folder
+    # Candidate path entries to try (nearest first)
+    candidates = []
+    # 1) If we're already inside repo_root/src/mm_ensemble, add repo_root/src
+    candidates.append(here.parents[1])           # .../src
+    candidates.append(here.parents[2] / "src")   # repo_root/src
+    # 2) Walk up and add any 'src' that contains mm_ensemble
+    for p in list(here.parents):
+        src = p / "src"
+        if (src / "mm_ensemble" / "utils" / "paths.py").exists():
+            candidates.append(src)
         if (p / "mm_ensemble" / "utils" / "paths.py").exists():
-            cand_paths.append(p)
-        # Case B: there's a 'src' under this parent
-        if (p / "src" / "mm_ensemble" / "utils" / "paths.py").exists():
-            cand_paths.append(p / "src")
+            candidates.append(p)
 
     # Deduplicate while preserving order
-    seen = set()
-    uniq = []
-    for c in cand_paths:
-        if c not in seen:
-            seen.add(c)
-            uniq.append(c)
+    seen, ordered = set(), []
+    for c in candidates:
+        if c and c.exists():
+            s = str(c)
+            if s not in seen:
+                seen.add(s)
+                ordered.append(s)
 
-    # Try adding each candidate and import
-    for c in uniq:
-        s = str(c)
+    for s in ordered:
         if s not in sys.path:
             sys.path.insert(0, s)
         try:
@@ -44,10 +45,9 @@ def _ensure_pkg_on_path() -> None:
         except Exception:
             continue
 
-    # Final hint if nothing worked
     raise ModuleNotFoundError(
         "Could not import 'mm_ensemble'. "
-        "Either install the repo (pip install -e .) or ensure PYTHONPATH includes the repo's 'src' folder."
+        "Install the repo (pip install -e .) or set PYTHONPATH=src."
     )
 
 try:
@@ -64,7 +64,7 @@ import matplotlib.pyplot as plt
 import math
 import json
 
-# Reuse your training/feature logic
+# Reuse your training/feature logic (the module itself has no Cloud-only deps)
 try:
     import mm_ensemble.last5_ensemble_plots as lp
 except ModuleNotFoundError:
@@ -73,7 +73,7 @@ except ModuleNotFoundError:
 
 st.set_page_config(page_title="mm_ensemble — last-5 demo", layout="wide")
 
-# ---------------------- helpers ----------------------
+# ---------- helpers ----------
 def _price_col(df: pd.DataFrame, pref: str = "auto") -> str:
     cand = [c.lower() for c in df.columns]
     if pref == "adj_close" and "adj_close" in cand:
@@ -126,17 +126,9 @@ def _rmse(a, b):
     if not m.any(): return float("nan")
     return float(np.sqrt(np.mean((a[m] - b[m])**2)))
 
-# ---------------------- sidebar ----------------------
+# ---------- sidebar ----------
 st.sidebar.title("mm_ensemble — config")
-
-# discover tickers in data/
-available = []
-if DATA_DIR.exists():
-    for p in DATA_DIR.iterdir():
-        if p.is_dir():
-            available.append(p.name)
-available = sorted(available) or ["SBUX", "PFE"]
-
+available = sorted([p.name for p in DATA_DIR.iterdir() if p.is_dir()]) if DATA_DIR.exists() else ["SBUX","PFE"]
 tickers = st.sidebar.multiselect("Tickers", options=available, default=available)
 feature_mode = st.sidebar.selectbox("Feature set", ["Both (compare)", "All inputs", "OHLCV only"], index=0)
 target = st.sidebar.text_input("Target column", value="target_return_1d")
@@ -152,7 +144,7 @@ run_btn = st.sidebar.button("Run last-5 predictions")
 st.title("Multimodal Ensemble — Last 5 Trading Days")
 st.caption("Uses pre-saved inputs in `data/` and your ensemble (XGB+ARIMA with auto-weights). No downloads.")
 
-# ---------------------- main ----------------------
+# ---------- main ----------
 if run_btn:
     out_base = OUTPUTS_DIR / "last5"
     out_base.mkdir(parents=True, exist_ok=True)
