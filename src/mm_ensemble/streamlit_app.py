@@ -1,29 +1,62 @@
-# src/mm_ensemble/streamlit_app.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# ── Robust bootstrap so the app runs even if the package isn't installed ──
 import sys
 from pathlib import Path
 
-# ---- Bootstrap: make sure `src/` is on sys.path when not installed with `pip -e .` ----
+def _ensure_pkg_on_path() -> None:
+    """
+    Make sure 'mm_ensemble' is importable by adding the correct folder to sys.path.
+    Works for these common layouts:
+      - repo_root/src/mm_ensemble/...
+      - repo_root/mm_ensemble/...  (plain package without 'src')
+    """
+    here = Path(__file__).resolve()
+
+    # Build a set of candidate directories to add to sys.path
+    cand_paths = []
+    parents = [here.parent] + list(here.parents)
+    for p in parents:
+        # Case A: the parent itself is the 'src' folder
+        if (p / "mm_ensemble" / "utils" / "paths.py").exists():
+            cand_paths.append(p)
+        # Case B: there's a 'src' under this parent
+        if (p / "src" / "mm_ensemble" / "utils" / "paths.py").exists():
+            cand_paths.append(p / "src")
+
+    # Deduplicate while preserving order
+    seen = set()
+    uniq = []
+    for c in cand_paths:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    # Try adding each candidate and import
+    for c in uniq:
+        s = str(c)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+        try:
+            import mm_ensemble  # noqa: F401
+            return
+        except Exception:
+            continue
+
+    # Final hint if nothing worked
+    raise ModuleNotFoundError(
+        "Could not import 'mm_ensemble'. "
+        "Either install the repo (pip install -e .) or ensure PYTHONPATH includes the repo's 'src' folder."
+    )
+
 try:
     from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # type: ignore
 except ModuleNotFoundError:
-    here = Path(__file__).resolve()
-    # Walk upwards and look for a sibling "src/mm_ensemble/utils/paths.py"
-    added = False
-    for parent in [here.parent] + list(here.parents):
-        cand = parent / "src"
-        if (cand / "mm_ensemble" / "utils" / "paths.py").exists():
-            sys.path.insert(0, str(cand))
-            added = True
-            break
-    if not added:
-        raise
-    # retry import after bootstrapping
+    _ensure_pkg_on_path()
     from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # type: ignore
 
-# ============= actual app =============
+# ── App starts here ──
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -31,13 +64,16 @@ import matplotlib.pyplot as plt
 import math
 import json
 
-# reuse your module’s logic (feature selection + training + auto weights)
-import mm_ensemble.last5_ensemble_plots as lp  # uses same bootstrap above
+# Reuse your training/feature logic
+try:
+    import mm_ensemble.last5_ensemble_plots as lp
+except ModuleNotFoundError:
+    _ensure_pkg_on_path()
+    import mm_ensemble.last5_ensemble_plots as lp
 
 st.set_page_config(page_title="mm_ensemble — last-5 demo", layout="wide")
 
 # ---------------------- helpers ----------------------
-
 def _price_col(df: pd.DataFrame, pref: str = "auto") -> str:
     cand = [c.lower() for c in df.columns]
     if pref == "adj_close" and "adj_close" in cand:
@@ -90,16 +126,14 @@ def _rmse(a, b):
     if not m.any(): return float("nan")
     return float(np.sqrt(np.mean((a[m] - b[m])**2)))
 
-# ---------------------- sidebar controls ----------------------
-
+# ---------------------- sidebar ----------------------
 st.sidebar.title("mm_ensemble — config")
 
-# Discover tickers from data/
+# discover tickers in data/
 available = []
 if DATA_DIR.exists():
     for p in DATA_DIR.iterdir():
         if p.is_dir():
-            # filter to known demo tickers if you want: {"SBUX","PFE"}
             available.append(p.name)
 available = sorted(available) or ["SBUX", "PFE"]
 
@@ -111,7 +145,6 @@ price_pref = st.sidebar.selectbox("Price column preference", ["auto", "adj_close
 plot_kind = st.sidebar.selectbox("Plot as", ["Price", "Return"], index=0)
 save_artifacts = st.sidebar.checkbox("Save artifacts into outputs/last5", value=True)
 
-# Propagate holdout-days into the reused module
 lp.HOLDOUT_DAYS = int(holdout_days)
 
 run_btn = st.sidebar.button("Run last-5 predictions")
@@ -119,8 +152,7 @@ run_btn = st.sidebar.button("Run last-5 predictions")
 st.title("Multimodal Ensemble — Last 5 Trading Days")
 st.caption("Uses pre-saved inputs in `data/` and your ensemble (XGB+ARIMA with auto-weights). No downloads.")
 
-# ---------------------- main action ----------------------
-
+# ---------------------- main ----------------------
 if run_btn:
     out_base = OUTPUTS_DIR / "last5"
     out_base.mkdir(parents=True, exist_ok=True)
