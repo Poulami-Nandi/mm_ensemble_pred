@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from pathlib import Path
+import sys
+
+# Ensure 'src' is importable when running on Cloud or locally
+here = Path(__file__).resolve()
+repo_root = here.parents[2]  # .../repo_root/src/mm_ensemble/streamlit_app.py
+src_dir = repo_root / "src"
+if src_dir.exists():
+    sys.path.insert(0, str(src_dir))
+
+from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # now import works
+import streamlit as st, sys
+st.write("sys.path", sys.path[:5])
+st.write("DATA_DIR exists?", DATA_DIR.exists())
+st.write("OUTPUTS_DIR exists?", OUTPUTS_DIR.exists())
 
 # ── Robust bootstrap so the app runs even if the package isn't installed ──
 import sys
