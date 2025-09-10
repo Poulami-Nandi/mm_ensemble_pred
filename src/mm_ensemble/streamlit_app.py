@@ -63,30 +63,67 @@ def _get_price_series(dataset_df: pd.DataFrame) -> pd.Series:
 def _reconstruct_price_path(
     ds: pd.Series, pred_series: pd.Series, full_prices: pd.DataFrame
 ) -> pd.Series:
-    """From 1-day returns, reconstruct a price path over the last-5 window."""
+    """
+    From 1-day returns, reconstruct a price path over the last-5 window.
+    Anchors on the last price BEFORE the first ds (or first-day price if needed).
+    """
     pred_series = pd.to_numeric(pred_series, errors="coerce").astype(float)
-    # anchor p0 = price on the day BEFORE the first ds (or first day if not available)
-    ds = pd.to_datetime(ds, utc=True).tz_convert(None).dt.floor("D")
+
+    # ✅ FIX: use .dt.tz_convert(None) on the Series, not .tz_convert(None)
+    ds = pd.to_datetime(ds, errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
+
     full_prices = full_prices.copy()
-    full_prices["ds"] = pd.to_datetime(full_prices["ds"], utc=True).tz_convert(None).dt.floor("D")
+    full_prices["ds"] = pd.to_datetime(full_prices["ds"], errors="coerce", utc=True)\
+                               .dt.tz_convert(None).dt.floor("D")
+
     # Merge to get actual price series aligned
-    merged = ds.to_frame(name="ds").merge(full_prices[["ds","price"]], on="ds", how="left")
-    # find p0 as the last price prior to the first date
+    merged = ds.to_frame(name="ds").merge(full_prices[["ds", "price"]], on="ds", how="left")
+
+    # Anchor price: last price strictly before first ds; else first day's price; else NaN -> fall back
     first_day = ds.min()
-    prev_price = full_prices.loc[full_prices["ds"] < first_day, "price"]
-    if len(prev_price) > 0 and np.isfinite(prev_price.values[-1]):
-        p0 = float(prev_price.values[-1])
+    prior = full_prices.loc[full_prices["ds"] < first_day, "price"]
+    if len(prior) > 0 and np.isfinite(prior.values[-1]):
+        p0 = float(prior.values[-1])
     else:
-        # fallback: use the first day's actual price if available
-        p0 = float(merged["price"].iloc[0]) if np.isfinite(merged["price"].iloc[0]) else float(np.nan)
+        p0 = float(merged["price"].iloc[0]) if np.isfinite(merged["price"].iloc[0]) else float("nan")
 
     if not np.isfinite(p0):
-        # ultimate fallback: just treat predictions as-is
+        # No reliable anchor -> return predictions as-is
         return pred_series
 
     # cumulative (1 + r_t)
     path = p0 * np.cumprod(1.0 + pred_series.values)
     return pd.Series(path, index=pred_series.index)
+
+
+def _ensure_price_df(df_pred: Optional[pd.DataFrame], pred_col: str) -> Optional[pd.DataFrame]:
+    """
+    Ensure the prediction frame is in price space and aligned with actual prices:
+    - Normalize ds to naive daily.
+    - If predictions look like returns, rebuild a price path.
+    - Attach 'Actual' price from dataset.parquet (ffill/bfill to avoid tiny gaps).
+    """
+    if df_pred is None:
+        return None
+
+    out = df_pred.copy()
+    out["ds"] = pd.to_datetime(out["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
+
+    if prices_df is not None:
+        base = prices_df.copy()
+        base["ds"] = pd.to_datetime(base["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
+        out = out.merge(base, on="ds", how="left")  # adds 'price'
+        out["Actual"] = pd.to_numeric(out["price"], errors="coerce")
+        out.drop(columns=["price"], inplace=True)
+        out["Actual"] = out["Actual"].ffill().bfill()
+
+        # If the predictions look like returns, convert them to a price path
+        if _is_returns_like(out[pred_col]):
+            fullp = prices_df.sort_values("ds")
+            out[pred_col] = _reconstruct_price_path(out["ds"], out[pred_col], fullp)
+
+    return out
+
 
 def _rmse(a: pd.Series, b: pd.Series) -> float:
     a = pd.to_numeric(a, errors="coerce")
@@ -191,26 +228,6 @@ def _section_for_ticker(ticker: str):
     if df_ohl is not None:
         df_ohl = df_ohl.rename(columns={"y_true":"Actual","y_pred_ohlcv":"Prediction_OHLCV"})
 
-    # If we have prices_df, convert returns → price if needed and recompute RMSE in price space
-    def _ensure_price_df(df_pred: Optional[pd.DataFrame], pred_col: str) -> Optional[pd.DataFrame]:
-        if df_pred is None:
-            return None
-        out = df_pred.copy()
-        out["ds"] = pd.to_datetime(out["ds"], utc=True).dt.tz_convert(None).dt.floor("D")
-        if prices_df is None:
-            return out  # no conversion possible
-
-        # Actual price from dataset
-        merged = out[["ds"]].merge(prices_df, on="ds", how="left")
-        out["Actual"] = merged["price"]
-
-        # If predictions look like returns, reconstruct price path
-        if _is_returns_like(out[pred_col]):
-            # build full prices (ds, price) for anchor
-            fullp = prices_df.sort_values("ds")
-            out[pred_col] = _reconstruct_price_path(out["ds"], out[pred_col], fullp)
-
-        return out
 
     df_ohl_p = _ensure_price_df(df_ohl, "Prediction_OHLCV") if df_ohl is not None else None
     df_all_p = _ensure_price_df(df_all, "Prediction_all")   if df_all is not None else None
