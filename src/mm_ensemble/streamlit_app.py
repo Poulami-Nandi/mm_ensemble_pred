@@ -86,6 +86,16 @@ except ModuleNotFoundError:
     _ensure_pkg_on_path()
     import mm_ensemble.last5_ensemble_plots as lp
 
+# in streamlit_app.py
+import pandas as pd
+from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
+
+# example: load last-5 predictions
+sbux_all = OUTPUTS_DIR / "last5" / "SBUX" / "pred_last5_all_inputs.csv"
+if sbux_all.exists():
+    df = pd.read_csv(sbux_all)
+    # plot with st.line_chart or matplotlib
+
 st.set_page_config(page_title="mm_ensemble — last-5 demo", layout="wide")
 
 # ---------- helpers ----------
