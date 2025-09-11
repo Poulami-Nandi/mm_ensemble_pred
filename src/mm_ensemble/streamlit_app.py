@@ -4,7 +4,7 @@
 from pathlib import Path
 from io import BytesIO
 import sys, os, json
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import streamlit as st
 import pandas as pd
 
@@ -131,7 +131,59 @@ def _metric_tiles(met: dict, title: str):
     c2.metric(f"w_xgb ({title})", "n/a" if w.get("w_xgb") is None else str(w.get("w_xgb")))
     c3.metric(f"w_arima ({title})", "n/a" if w.get("w_arima") is None else str(w.get("w_arima")))
 
-# ===== NEW: load close-price history (local → GitHub raw) =====
+# ====== NEW: load summary.json (for RMSE override only) ======
+def _load_summary_rmse() -> Dict[str, Dict[str, float]]:
+    """
+    Return {ticker: {"all_inputs": rmse, "ohlcv_only": rmse}}
+    Sources tried:
+      - local: outputs/last5/summary.json
+      - repo:  REPO_ROOT/outputs/last5/summary.json
+      - raw:   https://raw.githubusercontent.com/.../outputs/last5/summary.json
+    """
+    # 1) local output dir
+    local_candidates = [
+        OUTPUTS_DIR / "last5" / "summary.json",
+        REPO_ROOT / "outputs" / "last5" / "summary.json",
+    ]
+    payload = None
+    for p in local_candidates:
+        if p.exists():
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+                break
+            except Exception:
+                continue
+
+    # 2) raw fallback
+    if payload is None:
+        url = f"{RAW_PREFIX}/outputs/last5/summary.json"
+        jb = _fetch_raw_bytes(url)
+        if jb:
+            try:
+                payload = json.loads(jb.decode("utf-8"))
+            except Exception:
+                payload = None
+
+    out: Dict[str, Dict[str, float]] = {}
+    if not isinstance(payload, dict):
+        return out
+
+    # Expect structure like: {"tickers": {"PFE": {"all_inputs":{"rmse_last5":...}, "ohlcv_only":{"rmse_last5":...}}, ...}}
+    tickers = payload.get("tickers", {})
+    if isinstance(tickers, dict):
+        for t, entry in tickers.items():
+            rm_all = entry.get("all_inputs", {}).get("rmse_last5")
+            rm_ohl = entry.get("ohlcv_only", {}).get("rmse_last5")
+            one: Dict[str, float] = {}
+            if isinstance(rm_all, (int, float)):
+                one["all_inputs"] = float(rm_all)
+            if isinstance(rm_ohl, (int, float)):
+                one["ohlcv_only"] = float(rm_ohl)
+            if one:
+                out[t] = one
+    return out
+
+# ===== NEW: close price (unchanged from previous answer; optional to keep) =====
 def _norm_ds(s: pd.Series) -> pd.Series:
     s = pd.to_datetime(s, errors="coerce", utc=True)
     return s.dt.tz_convert(None).dt.floor("D")
@@ -149,20 +201,13 @@ def _read_csv_from_bytes(b: bytes) -> Optional[pd.DataFrame]:
         return None
 
 def _load_prices_df(ticker: str) -> Optional[pd.DataFrame]:
-    """
-    Try local first:
-      data/<TICKER>/prices.parquet
-      data/<TICKER>/prices.csv
-      (repo-root mirrors too)
-    If missing, try GitHub raw for the same paths.
-    """
     local_candidates = [
         DATA_DIR / ticker / "prices.parquet",
         DATA_DIR / ticker / "prices.csv",
         REPO_ROOT / "data" / ticker / "prices.parquet",
         REPO_ROOT / "data" / ticker / "prices.csv",
     ]
-    # Local
+    df, src = None, None
     for p in local_candidates:
         if p.exists():
             try:
@@ -171,10 +216,6 @@ def _load_prices_df(ticker: str) -> Optional[pd.DataFrame]:
                 break
             except Exception:
                 continue
-    else:
-        df, src = None, None
-
-    # Remote (GitHub raw)
     if df is None:
         for rp in (f"data/{ticker}/prices.parquet", f"data/{ticker}/prices.csv"):
             url = f"{RAW_PREFIX}/{rp}"
@@ -185,47 +226,52 @@ def _load_prices_df(ticker: str) -> Optional[pd.DataFrame]:
             if df is not None and not df.empty:
                 src = f"github: {url}"
                 break
-
     if df is None or df.empty:
         return None
-
-    # Normalize
     if "ds" not in df.columns and "date" in df.columns:
         df = df.rename(columns={"date": "ds"})
     df["ds"] = _norm_ds(df["ds"])
-
-    # Prefer raw close; fallback to adj_close
     price_col = "close" if "close" in df.columns else ("adj_close" if "adj_close" in df.columns else None)
     if price_col is None:
         return None
-
     df = df[["ds", price_col]].dropna().sort_values("ds")
     df = df.rename(columns={price_col: "Close"})
     df.attrs["source"] = src
     return df
 
-# --------- UI: SBUX + PFE, three prediction plots + price history ----------
+# --------- UI: SBUX + PFE, three prediction plots + (optional) price history ----------
+rmse_summary = _load_summary_rmse()
 tickers = _discover_tickers()
+
 for t in tickers:
     st.header(t)
 
-    # NEW: Close price history
+    # Optional: Close price history plot (keep if you added earlier)
     prices = _load_prices_df(t)
     if prices is not None and not prices.empty:
         st.subheader("Close price — full history")
         st.line_chart(prices.set_index("ds")["Close"])
         if prices.attrs.get("source"):
             st.caption(f"source: {prices.attrs['source']}")
-    else:
-        st.info("Close price file not found (tried local repo and GitHub raw).")
 
-    # Metrics & prediction plots (unchanged)
+    # Load original per-ticker metrics (for weights etc.)
     met_all = _json_local_or_raw(t, JSON_FILES["all_inputs"])
     met_ohl = _json_local_or_raw(t, JSON_FILES["ohlcv_only"])
 
-    _metric_tiles(met_all, "All inputs")
-    _metric_tiles(met_ohl, "OHLCV only")
+    # ===== Override ONLY RMSE from summary.json =====
+    if t in rmse_summary:
+        if "all_inputs" in rmse_summary[t]:
+            met_all = dict(met_all or {})
+            met_all["rmse_last5"] = rmse_summary[t]["all_inputs"]
+        if "ohlcv_only" in rmse_summary[t]:
+            met_ohl = dict(met_ohl or {})
+            met_ohl["rmse_last5"] = rmse_summary[t]["ohlcv_only"]
 
+    # Metric tiles (will now display RMSE from summary.json, weights from metrics_*.json)
+    _metric_tiles(met_all or {}, "All inputs")
+    _metric_tiles(met_ohl or {}, "OHLCV only")
+
+    # Plots (unchanged)
     st.subheader("a) OHLCV vs Actual")
     _show_image_anywhere(t, IMG_FILES["ohlcv_only"], "OHLCV vs Actual (Last 5 trading days)")
 
