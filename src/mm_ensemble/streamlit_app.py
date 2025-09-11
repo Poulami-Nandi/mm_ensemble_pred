@@ -6,6 +6,7 @@ from io import BytesIO
 import sys, os, json
 from typing import Optional, List
 import streamlit as st
+import pandas as pd
 
 # ── Repo root & src on sys.path (works on Streamlit Cloud and local)
 HERE = Path(__file__).resolve()
@@ -130,11 +131,95 @@ def _metric_tiles(met: dict, title: str):
     c2.metric(f"w_xgb ({title})", "n/a" if w.get("w_xgb") is None else str(w.get("w_xgb")))
     c3.metric(f"w_arima ({title})", "n/a" if w.get("w_arima") is None else str(w.get("w_arima")))
 
-# --------- UI: SBUX + PFE, three plots each ----------
+# ===== NEW: load close-price history (local → GitHub raw) =====
+def _norm_ds(s: pd.Series) -> pd.Series:
+    s = pd.to_datetime(s, errors="coerce", utc=True)
+    return s.dt.tz_convert(None).dt.floor("D")
+
+def _read_parquet_from_bytes(b: bytes) -> Optional[pd.DataFrame]:
+    try:
+        return pd.read_parquet(BytesIO(b))
+    except Exception:
+        return None
+
+def _read_csv_from_bytes(b: bytes) -> Optional[pd.DataFrame]:
+    try:
+        return pd.read_csv(BytesIO(b))
+    except Exception:
+        return None
+
+def _load_prices_df(ticker: str) -> Optional[pd.DataFrame]:
+    """
+    Try local first:
+      data/<TICKER>/prices.parquet
+      data/<TICKER>/prices.csv
+      (repo-root mirrors too)
+    If missing, try GitHub raw for the same paths.
+    """
+    local_candidates = [
+        DATA_DIR / ticker / "prices.parquet",
+        DATA_DIR / ticker / "prices.csv",
+        REPO_ROOT / "data" / ticker / "prices.parquet",
+        REPO_ROOT / "data" / ticker / "prices.csv",
+    ]
+    # Local
+    for p in local_candidates:
+        if p.exists():
+            try:
+                df = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+                src = f"local: {p}"
+                break
+            except Exception:
+                continue
+    else:
+        df, src = None, None
+
+    # Remote (GitHub raw)
+    if df is None:
+        for rp in (f"data/{ticker}/prices.parquet", f"data/{ticker}/prices.csv"):
+            url = f"{RAW_PREFIX}/{rp}"
+            b = _fetch_raw_bytes(url)
+            if not b:
+                continue
+            df = _read_parquet_from_bytes(b) if rp.endswith(".parquet") else _read_csv_from_bytes(b)
+            if df is not None and not df.empty:
+                src = f"github: {url}"
+                break
+
+    if df is None or df.empty:
+        return None
+
+    # Normalize
+    if "ds" not in df.columns and "date" in df.columns:
+        df = df.rename(columns={"date": "ds"})
+    df["ds"] = _norm_ds(df["ds"])
+
+    # Prefer raw close; fallback to adj_close
+    price_col = "close" if "close" in df.columns else ("adj_close" if "adj_close" in df.columns else None)
+    if price_col is None:
+        return None
+
+    df = df[["ds", price_col]].dropna().sort_values("ds")
+    df = df.rename(columns={price_col: "Close"})
+    df.attrs["source"] = src
+    return df
+
+# --------- UI: SBUX + PFE, three prediction plots + price history ----------
 tickers = _discover_tickers()
 for t in tickers:
     st.header(t)
 
+    # NEW: Close price history
+    prices = _load_prices_df(t)
+    if prices is not None and not prices.empty:
+        st.subheader("Close price — full history")
+        st.line_chart(prices.set_index("ds")["Close"])
+        if prices.attrs.get("source"):
+            st.caption(f"source: {prices.attrs['source']}")
+    else:
+        st.info("Close price file not found (tried local repo and GitHub raw).")
+
+    # Metrics & prediction plots (unchanged)
     met_all = _json_local_or_raw(t, JSON_FILES["all_inputs"])
     met_ohl = _json_local_or_raw(t, JSON_FILES["ohlcv_only"])
 
