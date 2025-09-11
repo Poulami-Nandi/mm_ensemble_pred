@@ -2,127 +2,72 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
-import sys, os, json
-from typing import Optional, List
+from io import BytesIO
+import sys, os
 import streamlit as st
 
-# ── Find repo root and make 'src' importable when running on Streamlit Cloud
-HERE = Path(__file__).resolve()
-# .../repo_root/src/mm_ensemble/streamlit_app.py  -> parents[2] == repo_root
-REPO_ROOT = HERE.parents[2]
-SRC_DIR = REPO_ROOT / "src"
-if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# --- SETTINGS (you can tweak in sidebar too) ---
+DEFAULT_REPO = "Poulami-Nandi/mm_ensemble_pred"
+DEFAULT_BRANCH = "main"
+TICKER = "PFE"
+FILENAME = "actual_vs_pred_all_inputs.png"   # change to e.g. "actual_vs_pred_ohlcv_only.png" or "compare_all_vs_ohlcv.png"
 
-# Prefer shared paths; fall back to repo-root-relative folders
-try:
-    from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR  # type: ignore
-except Exception:
-    DATA_DIR = REPO_ROOT / "data"
-    OUTPUTS_DIR = REPO_ROOT / "outputs"
+st.set_page_config(page_title="PFE plot loader", layout="centered")
+st.title("PFE — Single Plot Loader")
 
-# ── GitHub raw fallback (no probing; let Streamlit fetch directly)
-GITHUB_REPO_SLUG = os.getenv("GITHUB_REPO_SLUG", "Poulami-Nandi/mm_ensemble_pred")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
-RAW_PREFIX = f"https://raw.githubusercontent.com/{GITHUB_REPO_SLUG}/{GITHUB_BRANCH}"
+# Sidebar knobs
+repo = st.sidebar.text_input("GitHub repo (owner/name)", value=DEFAULT_REPO)
+branch = st.sidebar.text_input("Git branch", value=DEFAULT_BRANCH)
+fname = st.sidebar.text_input("File name", value=FILENAME)
+st.sidebar.caption("Try other options:\n- actual_vs_pred_ohlcv_only.png\n- compare_all_vs_ohlcv.png")
 
-st.set_page_config(page_title="mm_ensemble — Last-5 price demo (static)", layout="wide")
-st.title("Multimodal Ensemble — Last-5 Day Price Demo (Static Artifacts)")
-st.caption(f"DATA_DIR = {DATA_DIR}")
-st.caption(f"OUTPUTS_DIR = {OUTPUTS_DIR}")
-st.caption(f"GitHub fallback: {GITHUB_REPO_SLUG}@{GITHUB_BRANCH}")
+# --- Resolve repo root & local search paths ---
+here = Path(__file__).resolve()
+repo_root = here.parents[2]  # .../repo_root/src/mm_ensemble/show_one_plot_pfe.py
+outputs_new = repo_root / "outputs" / "last5" / TICKER / fname
+runs_legacy = repo_root / "data" / "runs" / "last5" / TICKER / fname
 
-# ---------- helpers: search local (multiple roots) or display from GitHub raw ----------
+local_candidates = [outputs_new, runs_legacy]
 
-def _candidate_local_paths(ticker: str, rel_name: str) -> List[Path]:
-    """Search in new layout, legacy layout, and repo-root-relative mirrors."""
-    return [
-        OUTPUTS_DIR / "last5" / ticker / rel_name,              # new local
-        DATA_DIR / "runs" / "last5" / ticker / rel_name,        # legacy local
-        REPO_ROOT / "outputs" / "last5" / ticker / rel_name,    # repo-root-relative (when OUTPUTS_DIR not set)
-        REPO_ROOT / "data" / "runs" / "last5" / ticker / rel_name,
-    ]
-
-def _first_existing_local(ticker: str, rel_name: str) -> Optional[Path]:
-    for p in _candidate_local_paths(ticker, rel_name):
+# --- Helper: load local bytes if exists ---
+def _load_local_bytes() -> bytes | None:
+    for p in local_candidates:
         if p.exists():
-            return p
+            st.caption(f"Loaded locally: {p}")
+            return p.read_bytes()
     return None
 
-def _json_local_or_raw(ticker: str, rel_name: str) -> dict:
-    """Try local JSON; if missing, fetch from GitHub raw; otherwise return {}."""
-    p = _first_existing_local(ticker, rel_name)
-    if p:
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            return {}
-    # Remote JSON fallback (best-effort)
+# --- Helper: fetch from GitHub raw (bytes) ---
+def _fetch_raw_bytes() -> bytes | None:
     try:
         import requests
-        for base in [f"outputs/last5/{ticker}", f"data/runs/last5/{ticker}"]:
-            url = f"{RAW_PREFIX}/{base}/{rel_name}"
-            r = requests.get(url, timeout=12)
-            if r.status_code == 200 and r.text.strip():
-                return r.json()
     except Exception:
-        pass
-    return {}
+        return None
+    for base in (f"outputs/last5/{TICKER}", f"data/runs/last5/{TICKER}"):
+        url = f"https://raw.githubusercontent.com/{repo}/{branch}/{base}/{fname}"
+        try:
+            r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200 and r.content:
+                st.caption(f"Loaded from GitHub raw: {url}")
+                return r.content
+        except Exception:
+            pass
+    return None
 
-def _show_image(ticker: str, rel_name: str, caption: str):
-    """Show image from first local hit; if none, render raw GitHub URL directly (no HEAD)."""
-    p = _first_existing_local(ticker, rel_name)
-    if p:
-        st.image(str(p), caption=caption, use_column_width=True)
-        return
-    # Remote (Streamlit will fetch the PNG; works with public repos)
-    # Try new layout first, then legacy
-    url_new = f"{RAW_PREFIX}/outputs/last5/{ticker}/{rel_name}"
-    url_old = f"{RAW_PREFIX}/data/runs/last5/{ticker}/{rel_name}"
-    # We won’t probe — just try to render the new URL first; if it truly 404s, the image widget shows broken,
-    # so we add a tiny toggle to try legacy immediately.
-    tabs = st.tabs(["new path", "legacy path"])
-    with tabs[0]:
-        st.image(url_new, caption=f"{caption} (from GitHub raw, new path)", use_column_width=True)
-    with tabs[1]:
-        st.image(url_old, caption=f"{caption} (from GitHub raw, legacy path)", use_column_width=True)
+# --- Try local first, then GitHub raw ---
+img_bytes = _load_local_bytes()
+if img_bytes is None:
+    img_bytes = _fetch_raw_bytes()
 
-def _discover_tickers() -> List[str]:
-    # Prefer local discovery (when running locally)
-    roots = [OUTPUTS_DIR / "last5", DATA_DIR / "runs" / "last5", REPO_ROOT / "outputs" / "last5", REPO_ROOT / "data" / "runs" / "last5"]
-    for r in roots:
-        if r.exists():
-            tickers = sorted([d.name for d in r.iterdir() if d.is_dir()])
-            if tickers:
-                return tickers
-    # Fallback to expected demo tickers
-    return ["SBUX", "PFE"]
-
-def _metric_tiles(met: dict, title_prefix: str):
-    rmse = met.get("rmse_last5")
-    w = met.get("weights") or {}
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"RMSE ({title_prefix})", "n/a" if rmse is None else (f"{rmse:.6f}" if isinstance(rmse, (int, float)) else str(rmse)))
-    c2.metric(f"w_xgb ({title_prefix})", "n/a" if w.get("w_xgb") is None else str(w.get("w_xgb")))
-    c3.metric(f"w_arima ({title_prefix})", "n/a" if w.get("w_arima") is None else str(w.get("w_arima")))
-
-# ---------- UI: static only (no training/inference) ----------
-
-for ticker in _discover_tickers():
-    st.header(ticker)
-
-    met_all = _json_local_or_raw(ticker, "metrics_all_inputs.json")
-    met_ohl = _json_local_or_raw(ticker, "metrics_ohlcv_only.json")
-    _metric_tiles(met_all, "All inputs")
-    _metric_tiles(met_ohl, "OHLCV only")
-
-    st.subheader("a) OHLCV vs Actual")
-    _show_image(ticker, "actual_vs_pred_ohlcv_only.png", "OHLCV vs Actual (Last 5 trading days)")
-
-    st.subheader("b) All inputs vs Actual")
-    _show_image(ticker, "actual_vs_pred_all_inputs.png", "All inputs vs Actual (Last 5 trading days)")
-
-    st.subheader("c) OHLCV vs All inputs vs Actual")
-    _show_image(ticker, "compare_all_vs_ohlcv.png", "Compare: Actual vs OHLCV vs All (Last 5 trading days)")
-
-st.success("Done. Displaying precomputed artifacts — no training or inference is run here.")
+# --- Show or explain what's missing ---
+if img_bytes:
+    st.image(BytesIO(img_bytes), caption=f"{TICKER} — {fname}", use_container_width=True)
+else:
+    st.error("Could not load the image from local paths or GitHub.")
+    st.write("Local paths checked:")
+    for p in local_candidates:
+        st.code(str(p))
+    st.write("GitHub raw tried:")
+    st.code(f"https://raw.githubusercontent.com/{repo}/{branch}/outputs/last5/{TICKER}/{fname}")
+    st.code(f"https://raw.githubusercontent.com/{repo}/{branch}/data/runs/last5/{TICKER}/{fname}")
+    st.info("If your repo is private, raw URLs won’t work. Commit the images into the repo and ensure the paths above exist in the deployed environment.")
