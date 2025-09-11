@@ -66,7 +66,7 @@ def fetch_raw_bytes() -> bytes | None:
 
     tried = []
     for base in (f"outputs/last5/{TICKER}", f"data/runs/last5/{TICKER}"):
-        url = f"https://raw.githubusercontent.com/{repo_slug}/{branch}/{base}/{FILENAME}"
+        url = f"https://github.com/{repo_slug}/{branch}/{base}/{FILENAME}"
         tried.append(url)
         try:
             r = requests.get(url, timeout=20, headers=headers)
