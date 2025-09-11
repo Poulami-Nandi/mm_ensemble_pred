@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+##############################################################################
+# Module: mm_ensemble/build_dataset.py
+# Overview:
+#   Builds modeling dataset by merging features/targets from raw inputs and saving train/val/test splits.
+# Notes:
+#   - This file has been annotated with verbose comments for clarity.
+#   - Logic is unchanged; only comments were added.
+##############################################################################
+
 
 """
 Build a modeling dataset by merging:
@@ -35,6 +44,7 @@ Usage examples:
   python build_dataset.py --split-mode date --train-end 2025-04-01 --val-end 2025-07-01
 """
 
+# Imports: stdlib, scientific stack, and optional ML/TS libs
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +55,13 @@ from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
 
 # ------------------------------- cfg -------------------------------
 
+
+# --- Dataclass ---
+# Configuration or typed records used across stages.
 @dataclass
+
+# --- Class `BuildCfg` ---
+# Purpose: Data structure or component in the pipeline.
 class BuildCfg:
     root: Path
     tickers: List[str]
@@ -113,7 +129,7 @@ def _trends_features(trends: pd.DataFrame) -> pd.DataFrame:
         else:
             df["gt"] = np.nan
     df = df.sort_values("ds").drop_duplicates(subset=["ds"])
-    # ffill occasional gaps from weekly sampling
+    # fill occasional gaps from weekly sampling
     df["gt"] = df["gt"].astype(float)
     df["gt"] = df["gt"].ffill()
 
@@ -222,6 +238,8 @@ def build_one(cfg: BuildCfg, ticker: str) -> Tuple[Path, Path, Path, Path]:
 
 # ------------------------------- cli -------------------------------
 
+
+# --- Function `main()` ---
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data", help="Root data folder")
@@ -236,6 +254,8 @@ def main():
     args = ap.parse_args()
 
     cfg = BuildCfg(
+
+# Configuration / constants / paths
         root=Path(args.root),
         tickers=[t.upper() for t in args.tickers],
         split_mode=args.split_mode,
@@ -256,5 +276,7 @@ def main():
     for w in written:
         print(" ", w)
 
+
+# Entrypoint: parse CLI args and run main routine.
 if __name__ == "__main__":
     main()
