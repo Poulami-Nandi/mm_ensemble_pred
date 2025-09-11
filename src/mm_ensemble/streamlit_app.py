@@ -4,7 +4,6 @@
 from pathlib import Path
 import sys, json
 from typing import Optional, Tuple, Dict
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -38,23 +37,20 @@ def _load_json(p: Path) -> Optional[dict]:
         return None
 
 def _is_returns_like(x: pd.Series) -> bool:
-    """Heuristic: returns are usually small; prices are typically >> 1 for equities."""
+    """Heuristic: returns are small; prices are usually >> 1 for equities."""
     x = pd.to_numeric(x, errors="coerce")
     x = x[np.isfinite(x)]
     if len(x) == 0:
         return False
-    # Most values within +/- 20% and absolute median < 5%
     frac_small = np.mean(np.abs(x) <= 0.2)
     return bool(frac_small > 0.8 and np.abs(np.nanmedian(x)) < 0.05)
 
-def _get_price_series(dataset_df: pd.DataFrame) -> pd.Series:
-    """Pick a price column from dataset.parquet, preferring adj_close then close."""
+def _pick_price_column(dataset_df: pd.DataFrame) -> pd.Series:
     cols = [c.lower() for c in dataset_df.columns]
     if "adj_close" in cols:
         return pd.to_numeric(dataset_df[dataset_df.columns[cols.index("adj_close")]], errors="coerce")
     if "close" in cols:
         return pd.to_numeric(dataset_df[dataset_df.columns[cols.index("close")]], errors="coerce")
-    # fallback: try to find something that endswith _close
     for c in dataset_df.columns:
         if str(c).lower().endswith("_close"):
             return pd.to_numeric(dataset_df[c], errors="coerce")
@@ -68,18 +64,14 @@ def _reconstruct_price_path(
     Anchors on the last price BEFORE the first ds (or first-day price if needed).
     """
     pred_series = pd.to_numeric(pred_series, errors="coerce").astype(float)
-
-    # ✅ FIX: use .dt.tz_convert(None) on the Series, not .tz_convert(None)
     ds = pd.to_datetime(ds, errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
 
     full_prices = full_prices.copy()
     full_prices["ds"] = pd.to_datetime(full_prices["ds"], errors="coerce", utc=True)\
                                .dt.tz_convert(None).dt.floor("D")
 
-    # Merge to get actual price series aligned
     merged = ds.to_frame(name="ds").merge(full_prices[["ds", "price"]], on="ds", how="left")
 
-    # Anchor price: last price strictly before first ds; else first day's price; else NaN -> fall back
     first_day = ds.min()
     prior = full_prices.loc[full_prices["ds"] < first_day, "price"]
     if len(prior) > 0 and np.isfinite(prior.values[-1]):
@@ -88,42 +80,10 @@ def _reconstruct_price_path(
         p0 = float(merged["price"].iloc[0]) if np.isfinite(merged["price"].iloc[0]) else float("nan")
 
     if not np.isfinite(p0):
-        # No reliable anchor -> return predictions as-is
-        return pred_series
+        return pred_series  # fall back: no reliable anchor
 
-    # cumulative (1 + r_t)
     path = p0 * np.cumprod(1.0 + pred_series.values)
     return pd.Series(path, index=pred_series.index)
-
-
-def _ensure_price_df(df_pred: Optional[pd.DataFrame], pred_col: str) -> Optional[pd.DataFrame]:
-    """
-    Ensure the prediction frame is in price space and aligned with actual prices:
-    - Normalize ds to naive daily.
-    - If predictions look like returns, rebuild a price path.
-    - Attach 'Actual' price from dataset.parquet (ffill/bfill to avoid tiny gaps).
-    """
-    if df_pred is None:
-        return None
-
-    out = df_pred.copy()
-    out["ds"] = pd.to_datetime(out["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
-
-    if prices_df is not None:
-        base = prices_df.copy()
-        base["ds"] = pd.to_datetime(base["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
-        out = out.merge(base, on="ds", how="left")  # adds 'price'
-        out["Actual"] = pd.to_numeric(out["price"], errors="coerce")
-        out.drop(columns=["price"], inplace=True)
-        out["Actual"] = out["Actual"].ffill().bfill()
-
-        # If the predictions look like returns, convert them to a price path
-        if _is_returns_like(out[pred_col]):
-            fullp = prices_df.sort_values("ds")
-            out[pred_col] = _reconstruct_price_path(out["ds"], out[pred_col], fullp)
-
-    return out
-
 
 def _rmse(a: pd.Series, b: pd.Series) -> float:
     a = pd.to_numeric(a, errors="coerce")
@@ -192,12 +152,42 @@ def _load_dataset_prices(ticker: str) -> Optional[pd.DataFrame]:
         return None
     df = pd.read_parquet(p)
     df = df.copy()
-    df["ds"] = pd.to_datetime(df["ds"], utc=True).dt.tz_convert(None).dt.floor("D")
+    df["ds"] = pd.to_datetime(df["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
     try:
-        price = _get_price_series(df)
+        price = _pick_price_column(df)
         return pd.DataFrame({"ds": df["ds"], "price": price})
     except Exception:
         return None
+
+def _ensure_price_df(df_pred: Optional[pd.DataFrame], pred_col: str, prices_df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """
+    Ensure the prediction frame is in price space and aligned with actual prices:
+    - Normalize ds to naive daily.
+    - If predictions look like returns, rebuild a price path.
+    - Attach 'Actual' price from dataset.parquet (ffill/bfill to avoid tiny gaps).
+    """
+    if df_pred is None:
+        return None
+    out = df_pred.copy()
+    out["ds"] = pd.to_datetime(out["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
+
+    if prices_df is not None:
+        base = prices_df.copy()
+        base["ds"] = pd.to_datetime(base["ds"], errors="coerce", utc=True).dt.tz_convert(None).dt.floor("D")
+        out = out.merge(base, on="ds", how="left")  # adds 'price'
+        out["Actual"] = pd.to_numeric(out["price"], errors="coerce")
+        out.drop(columns=["price"], inplace=True)
+        out["Actual"] = out["Actual"].ffill().bfill()
+
+        if _is_returns_like(out[pred_col]):
+            fullp = prices_df.sort_values("ds")
+            out[pred_col] = _reconstruct_price_path(out["ds"], out[pred_col], fullp)
+    else:
+        # No price frame available -> leave as-is (may already be prices)
+        if "Actual" not in out.columns:
+            out["Actual"] = np.nan
+
+    return out
 
 # --------------- UI per ticker ---------------
 
@@ -207,10 +197,8 @@ def _section_for_ticker(ticker: str):
     df_all, df_ohl, met_all, met_ohl, run_dir = _load_preds_and_metrics(ticker)
     prices_df = _load_dataset_prices(ticker)
 
-    # Show locations
     st.caption(f"Artifact dir: {run_dir}")
 
-    # Show weights & RMSE (from metrics if present)
     rmse_all_m = met_all.get("rmse_last5")
     rmse_ohl_m = met_ohl.get("rmse_last5")
     w_all = (met_all.get("weights") or {})
@@ -222,19 +210,19 @@ def _section_for_ticker(ticker: str):
     c3.metric("RMSE (OHLCV only, from metrics)", f"{rmse_ohl_m:.6f}" if isinstance(rmse_ohl_m, (int,float,np.floating)) else "n/a")
     c4.metric("w_xgb (OHLCV)", f"{w_ohl.get('w_xgb', 'n/a')}")
 
-    # Prepare dataframes with display names
+    # Rename for display
     if df_all is not None:
         df_all = df_all.rename(columns={"y_true":"Actual","y_pred_all":"Prediction_all"})
     if df_ohl is not None:
         df_ohl = df_ohl.rename(columns={"y_true":"Actual","y_pred_ohlcv":"Prediction_OHLCV"})
 
+    # Ensure price space & align with actuals
+    df_ohl_p = _ensure_price_df(df_ohl, "Prediction_OHLCV", prices_df) if df_ohl is not None else None
+    df_all_p = _ensure_price_df(df_all, "Prediction_all",   prices_df) if df_all is not None else None
 
-    df_ohl_p = _ensure_price_df(df_ohl, "Prediction_OHLCV") if df_ohl is not None else None
-    df_all_p = _ensure_price_df(df_all, "Prediction_all")   if df_all is not None else None
-
-    # Recompute RMSE in price space (shown in legend)
-    rmse_ohl = ( _rmse(df_ohl_p["Actual"], df_ohl_p["Prediction_OHLCV"]) ) if df_ohl_p is not None else float("nan")
-    rmse_all = ( _rmse(df_all_p["Actual"], df_all_p["Prediction_all"]) )   if df_all_p is not None else float("nan")
+    # Recompute RMSE in price space (for legend)
+    rmse_ohl = _rmse(df_ohl_p["Actual"], df_ohl_p["Prediction_OHLCV"]) if df_ohl_p is not None else float("nan")
+    rmse_all = _rmse(df_all_p["Actual"], df_all_p["Prediction_all"])   if df_all_p is not None else float("nan")
 
     # a) OHLCV vs Actual
     st.subheader("a) OHLCV vs Actual")
