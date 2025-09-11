@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+##############################################################################
+# Module: mm_ensemble/backtest.py
+# Overview:
+#   Runs a simple walk-forward/backtesting loop and records performance curves and metrics.
+# Notes:
+#   - This file has been annotated with verbose comments for clarity.
+#   - Logic is unchanged; only comments were added.
+##############################################################################
 
+
+# Imports: stdlib, scientific stack, and optional ML/TS libs
 import argparse, json
 from pathlib import Path
 import numpy as np
@@ -11,6 +21,8 @@ def _norm_ds(s: pd.Series) -> pd.Series:
     s = pd.to_datetime(s, errors="coerce", utc=True)
     return s.dt.tz_convert(None).dt.floor("D")
 
+
+# --- Function `_load_preds(tdir: Path, model: str)` ---
 def _load_preds(tdir: Path, model: str):
     df = pd.read_parquet(tdir / "predictions.parquet")
     df["ds"] = _norm_ds(df["ds"])
@@ -20,6 +32,8 @@ def _load_preds(tdir: Path, model: str):
     else: raise ValueError("model must be ensemble|xgb|arima")
     return df[["ds","split","y_true",col]].rename(columns={col:"yhat"})
 
+
+# --- Function `_load_prices(tdir: Path, price_col: str)` ---
 def _load_prices(tdir: Path, price_col: str):
     px = pd.read_parquet(tdir / "prices.parquet")
     px["ds"] = _norm_ds(px["ds"])
@@ -30,6 +44,8 @@ def _load_prices(tdir: Path, price_col: str):
             raise KeyError(f"{price_col} not found in prices")
     return px[["ds", price_col]].rename(columns={price_col: "px"})
 
+
+# --- Function `_metrics_from_curve(curve: pd.Series, freq_per_year=252)` ---
 def _metrics_from_curve(curve: pd.Series, freq_per_year=252):
     rets = curve.pct_change().dropna()
     if rets.empty:
@@ -45,6 +61,8 @@ def _metrics_from_curve(curve: pd.Series, freq_per_year=252):
     hit = float((rets > 0).mean())
     return {"CAGR":float(cagr), "Sharpe":float(sharpe), "MaxDD":maxdd, "HitRate":hit, "Len":int(len(rets))}
 
+
+# --- Function `main()` ---
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="data")
@@ -58,6 +76,8 @@ def main():
     ap.add_argument("--out-csv", default=None)
     args = ap.parse_args()
 
+
+# Configuration / constants / paths
     tdir = Path(args.root) / args.ticker.upper()
     preds = _load_preds(tdir, args.model)
     preds = preds.loc[preds["split"] == args.split].copy().sort_values("ds")
@@ -92,5 +112,7 @@ def main():
 
     print(json.dumps(metrics, indent=2))
 
+
+# Entrypoint: parse CLI args and run main routine.
 if __name__ == "__main__":
     main()
