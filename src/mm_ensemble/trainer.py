@@ -4,17 +4,17 @@
 """
 Trainer with AUTO ensemble weights (XGB + ARIMA) + price-level outputs
 
-- Trains XGB (or GBM fallback) on features in train/val/test parquet splits
-- Fits a simple ARIMA baseline on the train target series
-- Learns ensemble weight w on the validation split (min RMSE), clamps to [0,1]
-- Converts predicted returns -> price predictions using the previous day's close
-- Saves:
-    data/<TICKER>/predictions.parquet  (now includes p_true, p_xgb, p_arima, p_ens)
-    data/<TICKER>/metrics.json         (adds val_price/test_price RMSE)
-    data/<TICKER>/feature_importance.csv (if available)
-    data/<TICKER>/model_xgb.pkl or model_gbm.pkl
-    data/<TICKER>/feature_names.json
-    data/<TICKER>/feature_medians.json
+What this script does:
+- Trains an XGB regressor (or GBM fallback) on prebuilt train/val/test parquet splits.
+- Fits a simple ARIMA time-series baseline on the target series.
+- Learns an ensemble blend weight w on the validation split (min RMSE), clamps to [0,1].
+- Converts predicted daily returns -> price predictions using previous day's close.
+- Saves artifacts under data/<TICKER>/:
+    - predictions.parquet   (includes returns + price columns: p_true, p_xgb, p_arima, p_ens)
+    - metrics.json          (RMSE/MAE/R2/DirectionAcc + price RMSE for val/test)
+    - feature_importance.csv (if model exposes importances)
+    - model_xgb.pkl or model_gbm.pkl
+    - feature_names.json, feature_medians.json (for robust inference)
 """
 
 import argparse, json
@@ -29,14 +29,17 @@ import pandas as pd
 # -------------------------- utilities --------------------------
 
 def _norm_ds(s: pd.Series) -> pd.Series:
+    """Normalize any datetime-like series to naive daily timestamps."""
     s = pd.to_datetime(s, errors="coerce", utc=True)
     return s.dt.tz_convert(None).dt.floor("D")
 
 def _load_split(tdir: Path, name: str) -> pd.DataFrame:
+    """Load a time split parquet (train/val/test), normalize dates, sort."""
     df = pd.read_parquet(tdir / f"{name}.parquet")
     df["ds"] = _norm_ds(df["ds"])
     return df.sort_values("ds").reset_index(drop=True)
 
+# Basic metrics computed in return space
 def _metric_mae(y, yhat): return float(np.nanmean(np.abs(y - yhat)))
 def _metric_rmse(y, yhat): return float(np.sqrt(np.nanmean((y - yhat) ** 2)))
 def _metric_r2(y, yhat):
@@ -44,13 +47,15 @@ def _metric_r2(y, yhat):
     ss_tot = np.nansum((y - np.nanmean(y))**2)
     return float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
 def _metric_diracc(y, yhat):
+    """Directional accuracy: fraction of days where predicted sign matches true sign."""
     a = np.sign(y).astype(float); b = np.sign(yhat).astype(float)
     m = ~np.isnan(a) & ~np.isnan(b)
     return float(np.mean((a[m] > 0) == (b[m] > 0))) if m.any() else float("nan")
 
 def _collect_metrics(y_true: np.ndarray, y_pred: Dict[str, np.ndarray]) -> Dict[str, Dict[str, float]]:
+    """Compute a standard metric dict for multiple prediction series."""
     out = {}
-    for k,v in y_pred.items():
+    for k, v in y_pred.items():
         out[k] = {
             "MAE": _metric_mae(y_true, v),
             "RMSE": _metric_rmse(y_true, v),
@@ -60,10 +65,16 @@ def _collect_metrics(y_true: np.ndarray, y_pred: Dict[str, np.ndarray]) -> Dict[
     return out
 
 def _all_numeric(df: pd.DataFrame, drop_cols: List[str]) -> List[str]:
+    """Return all numeric feature columns, excluding drop_cols."""
     cand = [c for c in df.columns if c not in drop_cols]
     return [c for c in cand if pd.api.types.is_numeric_dtype(df[c])]
 
 def _prepare_xy(df: pd.DataFrame, target: str) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+    """
+    Select numeric features (excluding date/target/other targets),
+    then median-impute NaNs, replace inf with NaN -> fill 0;
+    return X, y, and the feature list.
+    """
     drop_cols = ["ds", target]
     drop_cols += [c for c in df.columns if c.lower().startswith("target_") and c != target]
     feats = _all_numeric(df, drop_cols)
@@ -80,8 +91,9 @@ def _prepare_xy(df: pd.DataFrame, target: str) -> Tuple[pd.DataFrame, pd.Series,
 
 def _get_xgb_model(random_state: int = 42, n_estimators: int = 1000, lr: float = 0.03, max_depth: int = 6):
     """
-    Return (model, is_xgb). Configure eval_metric on the model to avoid
-    XGBoost 2.x's removal of eval_metric from fit(...).
+    Try to return an XGBRegressor with a cross-version-safe config.
+    If xgboost is unavailable, fallback to sklearn's GradientBoostingRegressor.
+    Returns tuple: (model, is_xgb: bool).
     """
     try:
         from xgboost import XGBRegressor
@@ -95,12 +107,14 @@ def _get_xgb_model(random_state: int = 42, n_estimators: int = 1000, lr: float =
             objective="reg:squarederror",
             random_state=random_state,
             n_jobs=0,
-            eval_metric="rmse",  # set on model (works across 1.x and 2.x)
+            # Important: set eval_metric on the model itself to be compatible
+            # with both XGBoost 1.x and 2.x (2.x removed eval_metric from fit()).
+            eval_metric="rmse",
         )
         return model, True
     except Exception:
+        # Fallback: GradientBoosting (no native early stopping; we fit on train+val)
         from sklearn.ensemble import GradientBoostingRegressor
-from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
         model = GradientBoostingRegressor(
             n_estimators=600, learning_rate=0.05, max_depth=3, random_state=random_state
         )
@@ -109,15 +123,17 @@ from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
 
 def _fit_arima(series: pd.Series, seasonal: bool = False):
     """
-    Try pmdarima.auto_arima, fallback to statsmodels ARIMA(1,0,0),
-    else return None (naive zero baseline).
+    Fit an ARIMA-like baseline on the target series (returns).
+    - Prefer pmdarima.auto_arima (stepwise), fallback to statsmodels ARIMA(1,0,0).
+    - If too short or both unavailable, return None ("naive").
+    Returns (model, engine_name).
     """
     y = series.astype(float).values
     y = y[~np.isnan(y)]
     if len(y) < 20:
         return None, "naive"
 
-    # Try pmdarima
+    # Try pmdarima first (convenient auto-order search)
     try:
         import pmdarima as pm
         model = pm.auto_arima(
@@ -128,7 +144,7 @@ def _fit_arima(series: pd.Series, seasonal: bool = False):
     except Exception:
         pass
 
-    # Try statsmodels
+    # Fallback: statsmodels ARIMA
     try:
         import warnings
         warnings.filterwarnings("ignore")
@@ -140,16 +156,17 @@ def _fit_arima(series: pd.Series, seasonal: bool = False):
 
 
 def _forecast_arima(model, n_steps: int) -> np.ndarray:
+    """Forecast n_steps ahead from a fitted ARIMA-like model (robust to engine)."""
     if model is None or n_steps <= 0:
         return np.zeros(n_steps)
     try:
-        # pmdarima
+        # pmdarima engine
         import pmdarima as pm  # noqa: F401
         return model.predict(n_periods=n_steps)
     except Exception:
         pass
     try:
-        # statsmodels
+        # statsmodels engine
         return model.forecast(steps=n_steps)
     except Exception:
         return np.zeros(n_steps)
@@ -157,10 +174,11 @@ def _forecast_arima(model, n_steps: int) -> np.ndarray:
 
 def _fit_xgb_cross_version(model, Xtr, ytr, Xva, yva):
     """
-    Handles both xgboost 1.x and 2.x:
-    - Prefer callbacks.EarlyStopping (2.x / late 1.x)
-    - Fallback to early_stopping_rounds (older 1.x)
-    - Fallback to plain fit
+    Handle both xgboost 1.x and 2.x training flows.
+    Try (in order):
+      - callbacks.EarlyStopping (2.x / late 1.x)
+      - early_stopping_rounds (older 1.x)
+      - plain fit (no early stopping)
     """
     try:
         from xgboost.callback import EarlyStopping
@@ -201,7 +219,7 @@ def _pick_price_column(tdir: Path, pref: str = "auto") -> Optional[str]:
         return "adj_close"
     if pref == "close" and "close" in cols:
         return "close"
-    # auto
+    # auto mode: prefer adj_close if available
     if "adj_close" in cols:
         return "adj_close"
     if "close" in cols:
@@ -210,22 +228,21 @@ def _pick_price_column(tdir: Path, pref: str = "auto") -> Optional[str]:
 
 def _map_returns_to_prices(tdir: Path, ds_series: pd.Series, y_pred: np.ndarray, price_col: str) -> Tuple[pd.Series, pd.Series]:
     """
-    Convert predicted returns for dates ds_series to price predictions using
-    previous day's close from prices.parquet.
-    Returns (actual_price_series, predicted_price_series).
+    Convert predicted returns for the dates in ds_series to price predictions using
+    previous day's close from prices.parquet. Returns (actual_price_series, predicted_price_series).
     """
     px = pd.read_parquet(tdir / "prices.parquet")[["ds", price_col]].copy()
     px["ds"] = _norm_ds(px["ds"])
     px = px.sort_values("ds")
 
-    # previous day's close
+    # Use previous day's close as the base for 1-day forward return compounding
     px["prev_close"] = px[price_col].shift(1)
 
-    # align to requested dates
+    # Align to requested dates
     df_dates = pd.DataFrame({"ds": _norm_ds(ds_series)})
     df_aligned = df_dates.merge(px.rename(columns={price_col: "actual_price"}), on="ds", how="left")
 
-    # if any prev_close is still NaN (edge), forward-fill
+    # Edge-case handling: if prev_close is NaN at the start, ffill from earliest available
     df_aligned["prev_close"] = df_aligned["prev_close"].ffill()
 
     pred_price = df_aligned["prev_close"].values * (1.0 + np.asarray(y_pred, float))
@@ -236,6 +253,7 @@ def _map_returns_to_prices(tdir: Path, ds_series: pd.Series, y_pred: np.ndarray,
 
 @dataclass
 class TrainCfg:
+    """Configuration used during a single run across tickers."""
     root: Path
     tickers: List[str]
     target: str
@@ -250,15 +268,15 @@ class TrainCfg:
 
 def _opt_weight_closed_form(y_true: np.ndarray, y_xgb: np.ndarray, y_ar: np.ndarray) -> float:
     """
-    Solve w* in [0,1] minimizing || y - (w y_xgb + (1-w) y_ar) ||^2 on the
-    indices where all values are finite.
+    Solve for w* in [0,1] minimizing || y - (w y_xgb + (1-w) y_ar) ||^2 over points
+    where all values are finite. Closed-form solution with clipping to [0,1].
     """
     y = y_true.astype(float)
     a = y_xgb.astype(float)
     b = y_ar.astype(float)
     m = np.isfinite(y) & np.isfinite(a) & np.isfinite(b)
     if not m.any():
-        return 1.0  # fallback to XGB
+        return 1.0  # fallback to pure XGB if validation has no usable points
     y = y[m]; a = a[m]; b = b[m]
     d = (a - b)
     den = float(np.dot(d, d))
@@ -269,6 +287,7 @@ def _opt_weight_closed_form(y_true: np.ndarray, y_xgb: np.ndarray, y_ar: np.ndar
     return float(np.clip(w, 0.0, 1.0))
 
 def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
+    """Fit models, compute ensemble, write predictions/metrics for a single ticker."""
     tdir = cfg.root / ticker
     train = _load_split(tdir, "train")
     val   = _load_split(tdir, "val")
@@ -284,16 +303,17 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
     if is_xgb:
         _fit_xgb_cross_version(model, Xtr, ytr, Xva, yva)
     else:
-        # Fit GBM on train+val (no early stopping)
+        # GBM fallback: no early stopping, fit on train+val merged
         from sklearn.ensemble import GradientBoostingRegressor
         model: GradientBoostingRegressor
         model.fit(pd.concat([Xtr, Xva], axis=0), pd.concat([ytr, yva], axis=0))
 
+    # Supervised predictions in return space
     yhat_tr_xgb = model.predict(Xtr)
     yhat_va_xgb = model.predict(Xva)
     yhat_te_xgb = model.predict(Xte)
 
-    # Feature importance (if available)
+    # Feature importance (if model exposes it)
     fi_path = tdir / "feature_importance.csv"
     try:
         if hasattr(model, "feature_importances_"):
@@ -310,14 +330,16 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
 
     # ----------------- Weights (AUTO or fixed) -----------------
     if cfg.auto_weights:
+        # Learn w on validation split using closed-form least squares
         w1 = _opt_weight_closed_form(yva.values, yhat_va_xgb, yhat_va_ar)
         w2 = 1.0 - w1
     else:
+        # Use user-specified fixed weights (normalized to sum to 1)
         w1, w2 = cfg.w_xgb, cfg.w_arima
         s = (w1 + w2) if (w1 + w2) != 0 else 1.0
         w1, w2 = w1 / s, w2 / s
 
-    # ----------------- Ensemble -----------------
+    # ----------------- Ensemble in return space -----------------
     yhat_va_ens = w1 * yhat_va_xgb + w2 * yhat_va_ar
     yhat_te_ens = w1 * yhat_te_xgb + w2 * yhat_te_ar
 
@@ -353,17 +375,17 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
     # ----------------- Add price-space columns -----------------
     price_col = _pick_price_column(tdir, cfg.price_pref)
     if price_col is not None:
-        # Validation price mapping
+        # Validation price mapping (true + each model + ensemble)
         p_va_true, p_va_ens = _map_returns_to_prices(tdir, pred_va["ds"], pred_va["y_ens"].values, price_col)
         _,        p_va_xgb = _map_returns_to_prices(tdir, pred_va["ds"], pred_va["y_xgb"].values, price_col)
         _,        p_va_ari = _map_returns_to_prices(tdir, pred_va["ds"], pred_va["y_arima"].values, price_col)
 
-        # Test price mapping
+        # Test price mapping (true + each model + ensemble)
         p_te_true, p_te_ens = _map_returns_to_prices(tdir, pred_te["ds"], pred_te["y_ens"].values, price_col)
         _,        p_te_xgb = _map_returns_to_prices(tdir, pred_te["ds"], pred_te["y_xgb"].values, price_col)
         _,        p_te_ari = _map_returns_to_prices(tdir, pred_te["ds"], pred_te["y_arima"].values, price_col)
 
-        # Attach to frames
+        # Attach price columns
         pred_va["p_true"]  = p_va_true.values
         pred_va["p_xgb"]   = p_va_xgb.values
         pred_va["p_arima"] = p_va_ari.values
@@ -374,7 +396,7 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
         pred_te["p_arima"] = p_te_ari.values
         pred_te["p_ens"]   = p_te_ens.values
 
-        # Price RMSE
+        # Price RMSE (on val/test)
         def _safe_rmse(a, b):
             a = np.asarray(a, float); b = np.asarray(b, float)
             m = np.isfinite(a) & np.isfinite(b)
@@ -395,12 +417,12 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
         from joblib import dump
         artifact_path = tdir / ("model_xgb.pkl" if is_xgb else "model_gbm.pkl")
         dump(model, artifact_path)
-        # also save feature names and training medians for robust inference
+        # Also save feature names and training medians for robust inference
         feat_path = tdir / "feature_names.json"
         med_ser = Xtr.median(numeric_only=True).fillna(0.0)
         med_path  = tdir / "feature_medians.json"
         feat_path.write_text(json.dumps(list(Xtr.columns), indent=2), encoding="utf-8")
-        med_path.write_text(json.dumps({k: float(v) for k,v in med_ser.items()}, indent=2), encoding="utf-8")
+        med_path.write_text(json.dumps({k: float(v) for k, v in med_ser.items()}, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"[{ticker}] Warning: failed to save model or artifacts: {e}")
 
@@ -421,6 +443,7 @@ def _train_one_ticker(cfg: TrainCfg, ticker: str) -> Tuple[Path, Path]:
 
 @dataclass
 class TrainArgs:
+    """CLI-parseable arguments packed for _train_one_ticker."""
     root: Path
     tickers: List[str]
     target: str
@@ -444,7 +467,7 @@ def main():
     ap.add_argument("--w-arima", type=float, default=0.3, help="(Only if --no-auto-weights) Weight for ARIMA")
     ap.add_argument("--auto-weights", dest="auto_weights", action="store_true", help="Learn ensemble weights on validation")
     ap.add_argument("--no-auto-weights", dest="auto_weights", action="store_false", help="Disable auto weighting (use fixed)")
-    ap.set_defaults(auto_weights=True)  # <-- default to AUTO
+    ap.set_defaults(auto_weights=True)  # default to AUTO weighting
 
     ap.add_argument("--random-state", type=int, default=42)
     ap.add_argument("--n-estimators", type=int, default=1000)
