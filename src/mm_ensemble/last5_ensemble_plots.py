@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+##############################################################################
+# Module: mm_ensemble/last5_ensemble_plots.py
+# Overview:
+#   Trains on last ~1y, predicts last 5 trading days, produces comparison plots (Actual vs OHLCV vs All inputs).
+# Notes:
+#   - This file has been annotated with verbose comments for clarity.
+#   - Logic is unchanged; only comments were added.
+##############################################################################
 
+
+# Imports: stdlib, scientific stack, and optional ML/TS libs
 import os, json, math, warnings
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
@@ -10,6 +20,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # ========= config =========
+
+# Configuration / constants / paths
 ROOT = DATA_DIR              # where data/<TICKER>/dataset.parquet lives
 OUT_BASE = OUTPUTS_DIR / "last5" # outputs go here (NOT under data/)
 TICKERS = ["SBUX", "PFE"]
@@ -96,6 +108,10 @@ def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 # ========= models =========
 
+
+# --- Function `_fit_xgb(Xtr, ytr, Xva, yva)` ---
+# Purpose: Describe inputs/outputs and key steps.
+# (Auto-generated comment: refine as needed.)
 def _fit_xgb(Xtr, ytr, Xva, yva):
     """XGBoost version-agnostic fit, fallback to scikit GBM."""
     try:
@@ -129,6 +145,10 @@ from mm_ensemble.utils.paths import DATA_DIR, OUTPUTS_DIR
         model.fit(pd.concat([Xtr, Xva]), pd.concat([ytr, yva]))
         return model, "gbm"
 
+
+# --- Function `_fit_arima(series: pd.Series)` ---
+# Purpose: Describe inputs/outputs and key steps.
+# (Auto-generated comment: refine as needed.)
 def _fit_arima(series: pd.Series):
     """Try pmdarima, fallback to statsmodels ARIMA(1,0,0), else zeros."""
     y = pd.to_numeric(series, errors="coerce").values
@@ -216,11 +236,15 @@ def train_and_predict_last5(df: pd.DataFrame, feats: List[str], target: str) -> 
 
 # ========= plotting =========
 
+
+# --- Function `plot_actual_vs_pred(dates, y_true, y_pred, title, rmse, out_png=None, weights: Optional[Tuple[float,float]] = None)` ---
+# Purpose: Describe inputs/outputs and key steps.
+# (Auto-generated comment: refine as needed.)
 def plot_actual_vs_pred(dates, y_true, y_pred, title, rmse, out_png=None, weights: Optional[Tuple[float,float]] = None):
     # If weights provided, append into title
     if weights is not None:
         w_x, w_a = weights
-        title = f"{title} — w_xgb={w_x:.2f}, w_arima={w_a:.2f}"
+        title = f"{title} â€” w_xgb={w_x:.2f}, w_arima={w_a:.2f}"
     fig, ax = plt.subplots(figsize=(8, 3.8))
     ax.plot(dates, y_true, label="Actual price")
     ax.plot(dates, y_pred, label=f"Predicted price (RMSE=${rmse:.2f})")
@@ -297,6 +321,10 @@ def _rmse_price(a: np.ndarray, b: np.ndarray) -> float:
 
 # ========= main =========
 
+
+# --- Function `main()` ---
+# Purpose: Describe inputs/outputs and key steps.
+# (Auto-generated comment: refine as needed.)
 def main():
     OUT_BASE.mkdir(parents=True, exist_ok=True)
     summary = {"tickers": {}}
@@ -347,7 +375,7 @@ def main():
         df_all_price.to_csv(tdir / "pred_last5_all_inputs_PRICE.csv", index=False)
         plot_actual_vs_pred(
             df_all_price["ds"], df_all_price["actual_price"], df_all_price["pred_price_all"],
-            title=f"{t} — All inputs — Last 5 days (price)", rmse=rmse_all_price,
+            title=f"{t} â€” All inputs â€” Last 5 days (price)", rmse=rmse_all_price,
             out_png=tdir / "actual_vs_pred_all_inputs_PRICE.png",
             weights=(res_all["w_xgb"], res_all["w_arima"])
         )
@@ -358,18 +386,18 @@ def main():
         df_ohl_price.to_csv(tdir / "pred_last5_ohlcv_only_PRICE.csv", index=False)
         plot_actual_vs_pred(
             df_ohl_price["ds"], df_ohl_price["actual_price"], df_ohl_price["pred_price_ohlcv"],
-            title=f"{t} — OHLCV only — Last 5 days (price)", rmse=rmse_ohl_price,
+            title=f"{t} â€” OHLCV only â€” Last 5 days (price)", rmse=rmse_ohl_price,
             out_png=tdir / "actual_vs_pred_ohlcv_only_PRICE.png",
             weights=(res_ohl["w_xgb"], res_ohl["w_arima"])
         )
 
-        # Comparison (price) — include weights in legend lines
+        # Comparison (price) â€” include weights in legend lines
         plot_compare(
             df_all_price["ds"],
             df_all_price["actual_price"],
             df_ohl_price["pred_price_ohlcv"], rmse_ohl_price,
             df_all_price["pred_price_all"],  rmse_all_price,
-            title=f"{t} — Compare (Actual vs OHLCV vs All) — Price",
+            title=f"{t} â€” Compare (Actual vs OHLCV vs All) â€” Price",
             out_png=tdir / "compare_all_vs_ohlcv_PRICE.png",
             weights_ohlcv=(res_ohl["w_xgb"], res_ohl["w_arima"]),
             weights_all=(res_all["w_xgb"], res_all["w_arima"])
@@ -399,5 +427,7 @@ def main():
     for t in TICKERS:
         print(f"- {t} price plots saved under {OUT_BASE / t}")
 
+
+# Entrypoint: parse CLI args and run main routine.
 if __name__ == "__main__":
     main()
