@@ -5,24 +5,58 @@ This project combines traditional stock market data with online search trends to
 ## Project Structure
 ```bash
 mm_ensemble_pred/
+├── data/                         # saved input snapshots (no re-download)
+│   ├── PFE/
+│   │   ├── prices.parquet
+│   │   ├── trends.parquet
+│   │   ├── gdelt_daily.csv
+│   │   ├── facts.json
+│   │   └── dataset.parquet
+│   └── SBUX/                     # same structure as PFE
+│       ├── prices.parquet
+│       ├── trends.parquet
+│       ├── gdelt_daily.csv
+│       ├── facts.json
+│       └── dataset.parquet
+├── outputs/
+│   └── last5/                    # precomputed last-5-day artifacts
+│       ├── PFE/
+│       │   ├── actual_vs_pred_all_inputs_PRICE.png
+│       │   ├── actual_vs_pred_ohlcv_only_PRICE.png
+│       │   ├── compare_all_vs_ohlcv_PRICE.png
+│       │   ├── pred_last5_all_inputs.csv
+│       │   ├── pred_last5_ohlcv_only.csv
+│       │   ├── metrics_all_inputs.json
+│       │   └── metrics_ohlcv_only.json
+│       ├── SBUX/                 # same structure as PFE
+│       │   ├── actual_vs_pred_all_inputs_PRICE.png
+│       │   ├── actual_vs_pred_ohlcv_only_PRICE.png
+│       │   ├── compare_all_vs_ohlcv_PRICE.png
+│       │   ├── pred_last5_all_inputs.csv
+│       │   ├── pred_last5_ohlcv_only.csv
+│       │   ├── metrics_all_inputs.json
+│       │   └── metrics_ohlcv_only.json
+│       └── summary.json          # compact run summary (RMSE, pointers)
+├── src/
+│   └── mm_ensemble/
+│       ├── __init__.py
+│       ├── streamlit_app.py      # static viewer (shows saved artifacts only)
+│       ├── trainer.py            # XGB/GBM + ARIMA + auto-blend weights
+│       ├── build_dataset.py      # assembles features from saved inputs
+│       ├── last5_ensemble_plots.py
+│       ├── inference.py
+│       ├── backtest.py
+│       ├── plot_actual_vs_pred.py
+│       ├── build_fundamentals.py
+│       ├── data_ingest.py
+│       └── utils/
+│           ├── __init__.py
+│           └── paths.py          # repo-relative path helpers
+├── pyproject.toml
 ├── README.md
-├── streamlit_app.py
-├── requirements.txt
-├── data/
-│ ├── MSFT_OHLCV.csv
-│ ├── TSLA_OHLCV.csv
-│ ├── MSFT_trends.csv
-│ └── TSLA_trends.csv
-├── models/
-│ ├── lstm_model.py
-│ ├── arima_model.py
-│ └── xgboost_model.py
-├── utils/
-│ ├── data_loader.py
-│ ├── features.py
-│ └── shap_explainer.py
-└── notebooks/
-└── EDA_and_Dev.ipynb
+├── .gitattributes
+└── .gitignore
+
 ```
 markdown
 Copy
