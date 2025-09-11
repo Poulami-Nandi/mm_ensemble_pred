@@ -1,4 +1,4 @@
-# mm_ensemble â€” Multimodal Price Forecast Demo (SBUX & PFE)
+# Multimodal Price Forecast with Ensemble ML model (SBUX & PFE)
 
 This repo is a self-contained demo that forecasts daily **closing prices** for two well-known tickers **Starbucks (SBUX)** and **Pfizer (PFE)** by combining multiple free, programmatic data sources.  
 It uses a **multimodal ensemble**: a tree-based supervised model + a simple ARIMA time-series model, with **auto-weighted blending** to minimize validation RMSE.
@@ -15,8 +15,8 @@ The repo ships with **one year of input data already saved** under `data/`, so *
   - **GDELT News**: daily headline **volume** and **average tone** (coarse sentiment proxy).
   - **SEC EDGAR Company Facts** (XBRL JSON): slow-moving fundamentals (e.g., revenue/margins).
 - **Model**
-  - **Supervised track**: **XGBoost** (falls back to scikit-learn GBM if XGBoost isnâ€™t available).
-  - **Time-series track**: **ARIMA** (tries `pmdarima`, falls back to `statsmodels`, else naive).
+  - **Supervised track**: **XGBoost** (falls back to scikit-learn GBM if XGBoost is not available).
+  - **Time-series track**: **ARIMA** (tries `pmdarima`, falls back to `statsmodels`).
   - **Ensemble**: learn a single **blend weight** on the validation split that minimizes RMSE; clamp to [0, 1].  
     Final prediction = `w * (XGB/GBM) + (1 - w) * (ARIMA)`.
 - **Last-5-day demo**
@@ -173,8 +173,21 @@ mm_ensemble_pred/
 ## Notes on reproducibility
 
 - Inputs are frozen in `data/` for this project. You can re-run ingestion scripts if you want, but unput data are not required for the plots above.
-- If `pmdarima` is not available in your environment, ARIMA falls back to `statsmodels`, then to a naive baseline â€” the ensemble still works.
+- If `pmdarima` is not available in your environment, ARIMA falls back to `statsmodels`.
 - Python 3.11/3.12 is recommended for smooth installs.
+
+---
+
+## **Contact & Contributions**
+Found this project useful? Feel free to ⭐ star this repo and contribute!  
+**Author**: [Dr. Poulami Nandi](https://www.linkedin.com/in/poulami-nandi-a8a12917b/)  
+<img src="https://github.com/Poulami-Nandi/IV_surface_analyzer/raw/main/images/own/own_image.jpg" alt="Profile" width="150"/>  
+Physicist · Quant Researcher · Data Scientist  
+[University of Pennsylvania](https://live-sas-physics.pantheon.sas.upenn.edu/people/poulami-nandi) | [IIT Kanpur](https://www.iitk.ac.in/) | [TU Wien](http://www.itp.tuwien.ac.at/CPT/index.htm?date=201838&cats=xbrbknmztwd)
+
+📧 [nandi.poulami91@gmail.com](mailto:nandi.poulami91@gmail.com),    
+🔗 [LinkedIn](https://www.linkedin.com/in/poulami-nandi-a8a12917b/) • [GitHub](https://github.com/Poulami-Nandi) • [Google Scholar](https://scholar.google.co.in/citations?user=bOYJeAYAAAAJ&hl=en)  
+
 
 ---
 
