@@ -4,7 +4,7 @@
 """
 plot_actual_vs_pred.py
 
-What this script is for (plain English)
+What this script is for
 --------------------------------------
 Quickly plot "Actual vs Predicted" lines for a ticker over the *last N days*.
 
@@ -24,7 +24,7 @@ Two ways to source predictions:
    - Recomputes predictions on the full dataset *on the fly*:
        * Tries to load a saved model: model_xgb.pkl (or model_gbm.pkl).
        * If no saved model, it does a small "quick refit" inside the script:
-           - Learn medians from train (or dataset)
+           - Learn medians from  dataset
            - Fit XGBoost (preferred) with early stopping on a tiny val,
              otherwise fallback to sklearn boosting
    - Then it predicts for *all rows* and plots the last N.
