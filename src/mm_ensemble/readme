@@ -1,0 +1,124 @@
+File description:
+1) utils/paths.py
+
+Role: Central place to resolve project paths in a way that works both locally and on hosted services.
+
+Key idea: Exposes DATA_DIR (usually ./data) and OUTPUTS_DIR (usually ./outputs). Looks for environment variables PROJECT_ROOT, DATA_DIR, OUTPUTS_DIR so you can override without editing code.
+
+2) data_ingest.py (optional in your GitHub flow)
+
+Role: One-time downloader for the four free, programmatic streams:
+
+OHLCV via yfinance
+
+Google Trends via pytrends (chunked, retry/backoff)
+
+News counts + average tone via GDELT Doc API
+
+Company facts via SEC EDGAR (XBRL JSON)
+
+Outputs per ticker:
+data/<TICKER>/prices.parquet, trends.parquet, gdelt_daily.csv, facts.json, and metadata.json.
+
+Why optional: You already saved inputs in the repo; you don’t want to hit these APIs again. Keep this as a utility for future refreshes only.
+
+3) build_fundamentals.py
+
+Role: Turns raw SEC company facts (facts.json) into a daily fundamentals feature table (e.g., revenue/margins resampled to daily and forward-filled).
+
+Outputs per ticker:
+data/<TICKER>/fundamentals_daily.parquet.
+
+4) build_dataset.py
+
+Role: Builds the modeling dataset by merging per-ticker sources:
+
+Prices (OHLCV), Trends, News, Fundamentals
+
+Computes features (e.g., returns, rolling stats) and the target (typically target_return_1d).
+
+Splits into train/val/test (time-based).
+
+Outputs per ticker:
+data/<TICKER>/dataset.parquet, train.parquet, val.parquet, test.parquet. Often also feature_names.json (depending on script version).
+
+5) trainer.py
+
+Role: Trains the supervised model (XGBoost or GBM fallback), fits an ARIMA baseline, and learns AUTO ensemble weights on validation via a closed-form solution.
+
+Also maps returns → prices for validation/test using the previous day’s close (so plots and RMSE can be in actual price units).
+
+Outputs per ticker:
+
+metrics.json (return-space + price-space RMSE, learned weights)
+
+predictions.parquet (with y_* for returns and p_* for prices)
+
+model_xgb.pkl or model_gbm.pkl
+
+feature_importance.csv (if available)
+
+feature_names.json, feature_medians.json
+
+6) last5_ensemble_plots.py
+
+Role: Convenience “demo” script:
+
+Trains on ~last 1 year (excluding last 5 trading days) and predicts exactly those last 5 days.
+
+Runs two configurations per ticker:
+
+All inputs (OHLCV + Trends + News + Fundamentals)
+
+OHLCV-only
+
+Learns auto weights internally, produces CSV + three plots per ticker:
+
+Actual vs OHLCV prediction
+
+Actual vs All inputs prediction
+
+Actual vs Both predictions (comparison)
+
+Outputs per ticker:
+outputs/last5/<TICKER>/actual_vs_pred_ohlcv_only.png,
+outputs/last5/<TICKER>/actual_vs_pred_all_inputs.png,
+outputs/last5/<TICKER>/compare_all_vs_ohlcv.png,
+plus pred_last5_*.csv, metrics_*.json, and a run summary.json.
+
+7) inference.py
+
+Role: Loads a trained model and artifacts (feature_names.json, feature_medians.json) and runs out-of-sample prediction on new data periods (no re-training).
+
+Good for: Quick inference runs once models are trained; can reconstruct price-level predictions from return predictions.
+
+8) backtest.py
+
+Role: Simple walk-forward backtesting:
+
+Rolls through time windows, repeatedly fits/updates and evaluates the ensemble.
+
+Saves metrics curves so you can visualize stability.
+
+Outputs: A JSON summary (e.g., bt_*.json) and a CSV curve you can plot later (e.g., bt_*_curve.csv). In your older Colab runs these landed at project root; in GitHub-ready layout target outputs/backtests/.
+
+9) plot_actual_vs_pred.py
+
+Role: Small plotting helper for Actual vs Predicted curves from saved artifacts (e.g., predictions.parquet).
+
+Use case: If you want custom figures beyond those created by last5_ensemble_plots.py.
+
+10) experiment_last5.py (if present)
+
+Role: Earlier/alternate “last-5” driver. Some repos keep this as historical or for ablation runs. Prefer last5_ensemble_plots.py as the current, cleaned driver.
+
+11) streamlit_app.py
+
+Role: Streamlit UI that displays precomputed artifacts (no training from the app):
+
+Reads outputs/last5/<TICKER>/*.png plots and shows them.
+
+Can also load close-price histories from data/<TICKER>/prices.parquet.
+
+Designed to work with local paths; also includes GitHub raw fallback URLs.
+
